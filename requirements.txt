@@ -1,0 +1,14 @@
+pandas==2.2.2
+numpy==1.26.4
+xarray==2024.01.0
+netCDF4==1.7.3
+noaa-coops==0.4.0
+requests==2.31.0
+pytz==2024.1
+
+streamlit==1.45.1
+
+matplotlib==3.8.4
+seaborn==0.13.2
+
+scipy==1.13.0   

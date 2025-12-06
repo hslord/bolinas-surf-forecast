@@ -1,6 +1,12 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
+from fetch_data import fetch_data_wrapper
+from process_data import process_data_wrapper
+import yaml
+
+with open("../config/surf_config.yaml", "r") as f:
+    config = yaml.safe_load(f)
 
 st.set_page_config(page_title="Bolinas Surf Forecast", layout="wide")
 
@@ -8,17 +14,26 @@ st.set_page_config(page_title="Bolinas Surf Forecast", layout="wide")
 # LOAD DATA
 # -------------------------
 
-@st.cache_data
-def load_data():
-    df = pd.read_pickle("forecast_df.pkl")
+#@st.cache_data
+#def load_data():
+#    df = pd.read_pickle("forecast_df.pkl")
+#
+#    # Ensure index is DatetimeIndex
+#    if not isinstance(df.index, pd.DatetimeIndex):
+#        raise ValueError("forecast_df.pkl must have a DatetimeIndex as index.")
+#
+#    return df
 
-    # Ensure index is DatetimeIndex
-    if not isinstance(df.index, pd.DatetimeIndex):
-        raise ValueError("forecast_df.pkl must have a DatetimeIndex as index.")
+#forecast_df = load_data()
 
+@st.cache_data(show_spinner=True)
+def load_forecast():
+
+    raw = fetch_data_wrapper(config)
+    df = process_data_wrapper(raw, config)
     return df
 
-forecast_df = load_data()
+forecast_df = load_forecast()
 
 st.title("🌊 Bolinas Surf Forecast")
 st.caption("Interactive explorer for surf, swell, wind, and tide data")
@@ -40,11 +55,11 @@ available_dates = (
 selected_dates = st.sidebar.multiselect(
     "Select dates",
     options=available_dates,
-    default=[available_dates[0]]
+    default=[]
 )
 
 # Daylight filter
-daylight_only = st.sidebar.checkbox("Daylight hours only", value=False)
+daylight_only = st.sidebar.checkbox("Daylight hours only", value=True)
 
 # -------------------------
 # APPLY FILTERS

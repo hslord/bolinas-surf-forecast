@@ -1,6 +1,8 @@
 # PARAMETERS
 location_lat: 37.9094
 location_lon: -122.6864
+ww3_lat: 37.5
+ww3_lon: 237.0
 tide_station: "9414290" #SF GG, matching Surfline OR # "9414958"  # Bolinas Lagoon
 coast_orientation: 165  # SSE facing
 optimal_tide_range: (-1.0, 3.0)  # feet, MLLW

@@ -11,99 +11,70 @@ pacific = ZoneInfo("America/Los_Angeles")
 
 # DATA FETCHING FUNCTIONS
 
-def fetch_ww3_timeseries(lat, lon, start_deg=0.3, step=0.05, max_deg=2.0):
-    """
-    High-level WW3 extraction function.
+def detect_var(ds, keywords):
+    """Find the first variable containing *all* keywords (case-insensitive)."""
+    for v in ds.data_vars:
+        name = v.lower()
+        if all(k in name for k in keywords):
+            return v
+    return None
 
-    Automatically:
-      • Converts lon → 0–360
-      • Detects coord names
-      • Detects bulk wave variables (Hs, Tp, Dir)
-      • Finds nearest ocean grid cell (expanding search)
-      • Extracts time series and returns a clean DataFrame
+
+def fetch_ww3_timeseries(lat_valid, lon_valid, url=None):
+    """
+    FAST WW3 timeseries extractor.
+
+    Assumes:
+        • lat_valid, lon_valid were precomputed (known valid ocean grid point)
+        • lon_valid is already in 0–360 convention
 
     Returns:
-        DataFrame with columns:
+        DataFrame with:
             Hs_m, Tp_s, Dir_deg
+            index = datetime64 (Pacific tz, tz-naive)
     """
-    url="https://thredds.ucar.edu/thredds/dodsC/grib/NCEP/WW3/Global/Best"
 
-    # --- Standardize longitude to WW3 convention ---
-    lon_pt = lon + 360 if lon < 0 else lon
+    if url is None:
+        url = "https://thredds.ucar.edu/thredds/dodsC/grib/NCEP/WW3/Global/Best"
 
-    # --- Open dataset ---
+    # Open remote WW3 dataset
     ds = xr.open_dataset(url, engine="netcdf4")
 
-    # --- Detect coordinate names ---
+    # Detect coordinate names
     latname = next(c for c in ds.coords if "lat" in c.lower())
     lonname = next(c for c in ds.coords if "lon" in c.lower())
 
-    # --- Detect WW3 variables robustly ---
-    def detect_var(keywords):
-        for v in ds.data_vars:
-            name = v.lower()
-            if all(k in name for k in keywords):
-                return v
-        return None
-
-    var_hs  = detect_var(["significant", "combined", "wave"])
-    var_tp  = detect_var(["primary", "mean", "period"])
-    var_dir = detect_var(["primary", "direction"])
+    # Detect WW3 variables robustly  
+    var_hs  = detect_var(ds, ["significant", "combined", "wave"])
+    var_tp  = detect_var(ds, ["primary", "mean", "period"])
+    var_dir = detect_var(ds, ["primary", "direction"])
 
     if not all([var_hs, var_tp, var_dir]):
-        raise RuntimeError("Could not detect WW3 variable names.")
+        raise RuntimeError(
+            f"Could not detect WW3 wave variables. Available vars:\n{list(ds.data_vars)}"
+        )
 
-    # --- Detect time dimension (time, time1, etc.) ---
-    var0 = ds[var_hs]
-    time_dim = next(d for d in var0.dims if "time" in d.lower())
+    # Extract raw time series
+    hs = ds[var_hs].sel({latname: lat_valid, lonname: lon_valid}, method="nearest").to_pandas()
+    tp = ds[var_tp].sel({latname: lat_valid, lonname: lon_valid}, method="nearest").to_pandas()
+    dr = ds[var_dir].sel({latname: lat_valid, lonname: lon_valid}, method="nearest").to_pandas()
 
-    # --- Search for nearest valid ocean grid ---
-    def try_point(lat_try, lon_try):
-        try:
-            sub = ds[var_hs].sel({latname: lat_try, lonname: lon_try}, method="nearest")
-            v = sub.isel(**{time_dim: 0}).values
-            return sub if not np.isnan(v) else None
-        except Exception:
-            return None
-
-    found = None
-    radius = start_deg
-
-    while radius <= max_deg and found is None:
-        for dlat in np.arange(-radius, radius + step, step):
-            for dlon in np.arange(-radius, radius + step, step):
-                candidate = try_point(lat + dlat, lon_pt + dlon)
-                if candidate is not None:
-                    found = candidate
-                    break
-            if found is not None:
-                break
-        radius += step
-
-    if found is None:
-        raise RuntimeError(f"No valid WW3 ocean grid found within ±{max_deg}°")
-
-    # Extract the valid lat/lon used
-    lat_valid = float(found[latname])
-    lon_valid = float(found[lonname])
-
-    # --- Extract full time series from valid grid point ---
-    hs  = ds[var_hs ].sel({latname: lat_valid, lonname: lon_valid}, method="nearest").to_pandas()
-    tp  = ds[var_tp ].sel({latname: lat_valid, lonname: lon_valid}, method="nearest").to_pandas()
-    dr  = ds[var_dir].sel({latname: lat_valid, lonname: lon_valid}, method="nearest").to_pandas()
-
+    # Build dataframe
     df = pd.DataFrame({
         "Hs_m": hs,
         "Tp_s": tp,
         "Dir_deg": dr
     }).dropna()
 
+    # Convert UTC → Pacific, then drop timezone
     df.index = (
-    df.index.tz_localize("UTC")    
-           .tz_convert(pacific).tz_localize(None)    
-)
+        df.index.tz_localize("UTC")
+                .tz_convert(pacific)
+                .tz_localize(None)
+    )
 
     return df
+
 
 def fetch_cdip_029():
     """
@@ -232,3 +203,39 @@ def fetch_sunrise_sunset(lat, lon, days=14):
 
     df = pd.DataFrame(sun_data).set_index("date").sort_index()
     return df
+
+
+# WRAPPER FUNCTION 
+def fetch_data_wrapper(config):
+    """
+    Fetch ALL raw forecast inputs needed for processing.
+    Returns a dictionary of raw datasets.
+    """
+
+    # 1. Fetch WW3 Swell Forecast
+    print('fetching ww3 swell forecast')
+    ww3_df = fetch_ww3_timeseries(config['ww3_lat'], config['ww3_lon'])
+
+    # 2. Fetch CDIP actuals
+    print('fetching clip 029 actuals')
+    cdip_df = fetch_cdip_029()
+
+    # 3. Fetch tide predictions
+    print('fetching tides')
+    tide_df = fetch_tide_predictions(config['tide_station'])
+
+    # 4. Fetch wind forecast
+    print('fetching wind')
+    wind_df = fetch_wind_forecast(config['location_lat'], config['location_lon'])
+
+    # 5. Fetch sunrise/sunset times
+    print('fetching sunrise/sunset')
+    sun_df = fetch_sunrise_sunset(config['location_lat'], config['location_lon'])
+
+    return {
+        "ww3": ww3_df,
+        "cdip": cdip_df,
+        "tide": tide_df,
+        "wind": wind_df,
+        "sun": sun_df,
+    }

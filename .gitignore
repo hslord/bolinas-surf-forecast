@@ -205,3 +205,36 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# macOS system files
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.env/
+
+# Data files (do not commit local data)
+*.pkl
+*.nc
+data/
+
+# Large output images
+*.png
+
+# Streamlit settings
+.streamlit/
+
+# Jupyter / colab artifacts
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs
+*.log
+
+# IDE files
+.vscode/
+.idea/

@@ -12,7 +12,6 @@ A fully local, configurable surf-forecasting pipeline for Bolinas, CA. Fetches r
 - Surf-score model for Bolinas
 - Interactive UI via Streamlit
 - Configurable through YAML
-- All data stored locally (`.pkl`) — no large files committed
 
 ## Installation
 
@@ -43,7 +42,8 @@ config/surf_config.yaml
 ```
 
 Includes:
-- Latitude / longitude
+- Location latitude / longitude
+- WW3 latitude / longitude
 - NOAA tide station
 - CDIP buoy ID
 - Forecast horizon
@@ -53,21 +53,7 @@ Modify this file to customize the pipeline or adapt to another break.
 
 ## Usage
 
-### 1. Generate/refresh forecast data
-
-```bash
-python src/run_surf_app.py
-```
-
-This creates:
-
-```
-src/forecast_df.pkl
-```
-
-(ignored by `.gitignore`)
-
-### 2. Launch the Streamlit UI
+### Launch the Streamlit UI
 
 ```bash
 streamlit run src/surf_app_streamlit.py
@@ -89,8 +75,9 @@ bolinas-surf-forecast/
 ├── src/
 │   ├── fetch_data.py
 │   ├── process_data.py
+│   ├── reference_functions.py
 │   ├── surf_app_streamlit.py
-│   ├── run_surf_app.py
+│   ├── run_surf_app_local.py
 │   └── __init__.py
 │
 ├── requirements.txt

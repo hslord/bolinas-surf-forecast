@@ -14,18 +14,6 @@ st.set_page_config(page_title="Bolinas Surf Forecast", layout="wide")
 # LOAD DATA
 # -------------------------
 
-#@st.cache_data
-#def load_data():
-#    df = pd.read_pickle("forecast_df.pkl")
-#
-#    # Ensure index is DatetimeIndex
-#    if not isinstance(df.index, pd.DatetimeIndex):
-#        raise ValueError("forecast_df.pkl must have a DatetimeIndex as index.")
-#
-#    return df
-
-#forecast_df = load_data()
-
 @st.cache_data(show_spinner=True)
 def load_forecast():
 
@@ -106,8 +94,9 @@ st.subheader("📊 Daily Average Surf Metrics")
 # Ensure datetime column exists (we already reset_index earlier)
 daylight_df["day"] = daylight_df["datetime"].dt.date
 
-# Select only numeric columns for aggregation
-numeric_cols = daylight_df.select_dtypes(include=["float", "int"]).columns
+# Select only key numeric columns for aggregation
+numeric_cols = ['Surf Score (1-10)',  'Surf Height Min (ft)',
+ 'Surf Height Max (ft)', 'Swell Size (ft)', 'Swell Period (Seconds)', 'Swell Direction (Degrees)']
 
 # Compute daily averages
 daily_avg_df = (

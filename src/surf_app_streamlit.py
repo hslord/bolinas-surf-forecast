@@ -17,7 +17,7 @@ st.set_page_config(page_title="Bolinas Surf Forecast", layout="wide")
 @st.cache_data(show_spinner=True)
 def load_forecast():
 
-    raw = fetch_data_wrapper(config)
+    raw = fetch_data_wrapper(config['data_sources'])
     df = process_data_wrapper(raw, config)
     return df
 
@@ -113,12 +113,23 @@ st.dataframe(daily_avg_df, use_container_width=True)
 # TIME SERIES PLOTS (Altair)
 # ==========================
 
-def alt_chart(df, y_col, y_title, color="steelblue"):
-    """Reusable chart builder."""
-    chart = alt.Chart(df.reset_index()).mark_line(color=color).encode(
-        x=alt.X("index:T", title="Date/Time", axis=alt.Axis(format="%b %d")),
-        y=alt.Y(f"{y_col}:Q", title=y_title)
-    ).properties(height=200)
+def alt_chart(df, y_col, y_title, domain=None, color="steelblue"):
+    """Reusable chart builder with optional y-axis domain."""
+    y_encoding = alt.Y(
+        f"{y_col}:Q",
+        title=y_title,
+        scale=alt.Scale(domain=domain) if domain else alt.Undefined  # <-- key line
+    )
+
+    chart = (
+        alt.Chart(df.reset_index())
+        .mark_line(color=color)
+        .encode(
+            x=alt.X("index:T", title="Date/Time", axis=alt.Axis(format="%b %d")),
+            y=y_encoding,
+        )
+        .properties(height=200)
+    )
     return chart
 
 st.subheader("📈 Time Series Plots")
@@ -128,13 +139,25 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 with tab1:
-    st.altair_chart(alt_chart(filtered, "Surf Score (1-10)", "Surf Score"), use_container_width=True)
+    st.altair_chart(
+        alt_chart(filtered, "Surf Score (1-10)", "Surf Score", domain=[0, 10]),
+        use_container_width=True
+    )
 
 with tab2:
-    st.altair_chart(alt_chart(filtered, "Surf Height Max (ft)", "Surf Height (ft)"), use_container_width=True)
+    st.altair_chart(
+        alt_chart(filtered, "Surf Height Max (ft)", "Surf Height (ft)", domain=[0, 6]),
+        use_container_width=True
+    )
 
 with tab3:
-    st.altair_chart(alt_chart(filtered, "Wind Speed (MPH)", "Wind Speed (mph)", color="green"), use_container_width=True)
+    st.altair_chart(
+        alt_chart(filtered, "Wind Speed (MPH)", "Wind Speed (mph)", domain=[0, 30], color="green"),
+        use_container_width=True
+    )
 
 with tab4:
-    st.altair_chart(alt_chart(filtered, "Tide Height (ft)", "Tide Height (ft)", color="teal"), use_container_width=True)
+    st.altair_chart(
+        alt_chart(filtered, "Tide Height (ft)", "Tide Height (ft)", domain=[-2, 7], color="teal"),
+        use_container_width=True
+    )

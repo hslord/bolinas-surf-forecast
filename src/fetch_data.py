@@ -6,13 +6,30 @@ from zoneinfo import ZoneInfo
 import xarray as xr
 import pandas as pd
 import numpy as np
+from typing import Dict, Any, List
 
 pacific = ZoneInfo("America/Los_Angeles")
 
-# DATA FETCHING FUNCTIONS
+def detect_var(
+    ds: xr.Dataset,
+    keywords: List[str]
+):
+    """
+    Find the first data variable name containing all given keywords.
 
-def detect_var(ds, keywords):
-    """Find the first variable containing *all* keywords (case-insensitive)."""
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Dataset whose variable names will be searched.
+    keywords : list of str
+        List of case-insensitive substrings that must all appear in
+        the variable name.
+
+    Returns
+    -------
+    str or None
+        Name of the first matching variable, or None if no match is found.
+    """
     for v in ds.data_vars:
         name = v.lower()
         if all(k in name for k in keywords):
@@ -20,24 +37,41 @@ def detect_var(ds, keywords):
     return None
 
 
-def fetch_ww3_timeseries(lat_valid, lon_valid, url=None):
+def fetch_ww3_timeseries(
+    lat_valid: float,
+    lon_valid: float,
+    debug: bool = False
+):
     """
-    FAST WW3 timeseries extractor.
+    Extract a WW3 timeseries at a validated grid point.
 
-    Assumes:
-        • lat_valid, lon_valid were precomputed (known valid ocean grid point)
-        • lon_valid is already in 0–360 convention
+    Parameters
+    ----------
+    lat_valid : float
+        Latitude of a known valid WW3 ocean grid point.
+    lon_valid : float
+        Longitude in 0-360 convention for the WW3 grid point.
+    debug : bool, optional
+        If True, prints extra information useful for development.
 
-    Returns:
-        DataFrame with:
-            Hs_m, Tp_s, Dir_deg
-            index = datetime64 (Pacific tz, tz-naive)
+    Returns
+    -------
+    pandas.DataFrame
+        Hourly WW3 time series with columns:
+        - Hs_m : Significant wave height (m)
+        - Tp_s : Peak period (s)
+        - Dir_deg : Mean wave direction (degrees)
+        Index is datetime64 (tz-naive, Pacific-local timestamps).
     """
-
-    if url is None:
-        url = "https://thredds.ucar.edu/thredds/dodsC/grib/NCEP/WW3/Global/Best"
+    if debug:
+        return pd.DataFrame({
+            "Hs_m":[1,1.5,2,2.5],
+            "Tp_s":[10,11,12,13],
+            "Dir_deg":[270,260,250,240]
+        }, index=pd.date_range("2025-01-01", periods=4, freq="H"))
 
     # Open remote WW3 dataset
+    url = "https://thredds.ucar.edu/thredds/dodsC/grib/NCEP/WW3/Global/Best"
     ds = xr.open_dataset(url, engine="netcdf4")
 
     # Detect coordinate names
@@ -79,9 +113,19 @@ def fetch_ww3_timeseries(lat_valid, lon_valid, url=None):
 def fetch_cdip_029():
     """
     Fetch and process CDIP 029 (Point Bonita) historical swell data.
-    Output:
-        cdip_3h : DataFrame indexed by datetime (UTC-naive),
-                  with columns: Hs_029_m, Tp_029_s, Dir_029_deg
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    pandas.DataFrame
+        3-hourly CDIP observations indexed by datetime (UTC-naive)
+        with columns:
+        - Hs_029_m : Significant wave height (m)
+        - Tp_029_s : Peak period (s)
+        - Dir_029_deg : Mean wave direction (degrees)
     """
     cdip_url = (
         "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
@@ -110,8 +154,26 @@ def fetch_cdip_029():
 
     return cdip_3h
 
-def fetch_tide_predictions(station_id, days=14):
-    """Fetch tide predictions in Pacific time (PST/PDT)"""
+def fetch_tide_predictions(
+    station_id: str,
+     days: int = 14):
+    """
+    Fetch tide predictions from NOAA CO-OPS and return hourly tide heights
+    in Pacific local time (PST/PDT).
+
+    Parameters
+    ----------
+    station_id : str
+        NOAA CO-OPS station identifier (e.g., "9414958").
+    days : int, optional
+        Number of days of tide predictions to request. Default is 14.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Tide forecast indexed by localized datetime (Pacific), containing:
+        - tide_height : float  Tide height in feet (MLLW)
+    """
     station = Station(id=station_id)
 
     # Use Pacific time for begin/end dates
@@ -141,8 +203,27 @@ def fetch_tide_predictions(station_id, days=14):
 
     return df
 
-def fetch_wind_forecast(lat, lon):
-    """Fetch NWS wind forecast in Pacific time (PST/PDT)"""
+def fetch_wind_forecast(
+    lat: float, 
+    lon: float):
+    """
+    Fetch NWS wind forecast and return hourly wind speed and direction
+    in Pacific local time (PST/PDT).
+
+    Parameters
+    ----------
+    lat : float
+        Latitude of forecast location (decimal degrees).
+    lon : float
+        Longitude of forecast location (decimal degrees).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Wind forecast indexed by localized datetime (Pacific), containing:
+        - wind_speed : float   Wind speed in mph
+        - wind_direction : str Wind direction as compass abbreviation (e.g., "NW")
+    """
     headers = {'User-Agent': 'BolinasSurfForecast/1.0 (surfforecast@example.com)'}
 
     # Get grid point
@@ -175,8 +256,31 @@ def fetch_wind_forecast(lat, lon):
     df = pd.DataFrame(wind_data).set_index("datetime").sort_index()
     return df
 
-def fetch_sunrise_sunset(lat, lon, days=14):
-    """Fetch sunrise/sunset data and convert to Pacific time (PST/PDT)"""
+def fetch_sunrise_sunset(
+    lat: float, 
+    lon: float, 
+    days: int = 14):
+    """
+    Fetch sunrise and sunset times for a given location, convert timestamps
+    to Pacific local time (PST/PDT), and return daily first-light and
+    last-light estimates.
+
+    Parameters
+    ----------
+    lat : float
+        Latitude of location (decimal degrees).
+    lon : float
+        Longitude of location (decimal degrees).
+    days : int, optional
+        Number of days to retrieve sunrise/sunset data for. Default is 14.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Daily sunrise/sunset table indexed by date, containing:
+        - first_light : datetime (Pacific)
+        - last_light  : datetime (Pacific)
+    """
     sun_data = []
     start_date = datetime.now(pacific).date()  # Use Pacific time for start date
 
@@ -205,32 +309,53 @@ def fetch_sunrise_sunset(lat, lon, days=14):
     return df
 
 
-# WRAPPER FUNCTION 
-def fetch_data_wrapper(config):
+def fetch_data_wrapper(data_sources: Dict):
     """
-    Fetch ALL raw forecast inputs needed for processing.
-    Returns a dictionary of raw datasets.
+    Fetch all raw forecast input datasets (swell, tides, wind, sun),
+    using the configuration values contained in `data_sources`.
+
+    Parameters
+    ----------
+    data_sources : dict
+        Configuration dictionary for required data-fetch parameters.
+
+    Returns
+    -------
+    dict
+        Dictionary of raw dataframes with keys:
+            "ww3" : pd.DataFrame offshore wave forecast
+            "cdip": pd.DataFrame observed buoy history
+            "tide": pd.DataFrame tide predictions
+            "wind": pd.DataFrame wind forecast
+            "sun" : pd.DataFrame sunrise / sunset times
     """
 
-    # 1. Fetch WW3 Swell Forecast
-    print('fetching ww3 swell forecast')
-    ww3_df = fetch_ww3_timeseries(config['ww3_lat'], config['ww3_lon'])
+    # 1. offshore swell (fast extractor)
+    ww3_df = fetch_ww3_timeseries(
+        data_sources["ww3_lat"],
+        data_sources["ww3_lon"],
+        debug=data_sources.get("debug", False)
+    )
 
-    # 2. Fetch CDIP actuals
-    print('fetching clip 029 actuals')
+    # 2. buoy observations (CDIP 029)
     cdip_df = fetch_cdip_029()
 
-    # 3. Fetch tide predictions
-    print('fetching tides')
-    tide_df = fetch_tide_predictions(config['tide_station'])
+    # 3. tides
+    tide_df = fetch_tide_predictions(
+        data_sources["tide_station"]
+    )
 
-    # 4. Fetch wind forecast
-    print('fetching wind')
-    wind_df = fetch_wind_forecast(config['location_lat'], config['location_lon'])
+    # 4. wind (NWS API)
+    wind_df = fetch_wind_forecast(
+        data_sources["location_lat"],
+        data_sources["location_lon"]
+    )
 
-    # 5. Fetch sunrise/sunset times
-    print('fetching sunrise/sunset')
-    sun_df = fetch_sunrise_sunset(config['location_lat'], config['location_lon'])
+    # 5. sunrise/sunset (NOAA external API)
+    sun_df = fetch_sunrise_sunset(
+        data_sources["location_lat"],
+        data_sources["location_lon"]
+    )
 
     return {
         "ww3": ww3_df,

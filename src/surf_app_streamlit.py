@@ -14,6 +14,9 @@ def load_forecast():
         st.sidebar.error(f"Failed loading forecast_df.pkl")
 
 forecast_df = load_forecast()
+# Ensure datetime index (important for .pkl loads)
+if not isinstance(forecast_df.index, pd.DatetimeIndex):
+    forecast_df.index = pd.to_datetime(forecast_df.index)
 
 st.title("🌊 Bolinas Surf Forecast")
 st.caption("Your personalized surf, swell, wind, and tide dashboard.")

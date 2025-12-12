@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from fetch_data import fetch_data_wrapper
-from process_data import process_data_wrapper
 import yaml
 
 # ------------------------------------
@@ -14,29 +12,17 @@ with open("../config/surf_config.yaml", "r") as f:
 st.set_page_config(page_title="Bolinas Surf Forecast", layout="wide")
 
 # ------------------------------------
-# DATA LOADING (pkl OR pipeline)
+# DATA LOADING (pkl)
 # ------------------------------------
 @st.cache_data(show_spinner=True)
-def load_forecast(config):
-    use_local = config["data_sources"].get("use_local_pkl")
-    pkl_path = config["data_sources"].get("local_pkl_path")
+def load_forecast():
+    try:
+        df = pd.read_pickle('forecast_df.pkl')
+        return df
+    except Exception as e:
+        st.sidebar.error(f"Failed loading forecast_df.pkl")
 
-    # Option A — load from .pkl
-    if use_local:
-        try:
-            df = pd.read_pickle(pkl_path)
-            st.sidebar.success(f"Loaded forecast from local cache: {pkl_path}")
-            return df
-        except Exception as e:
-            st.sidebar.error(f"Failed loading .pkl ({e}) — falling back to full pipeline.")
-
-    # Option B — run pipeline
-    raw = fetch_data_wrapper(config["data_sources"])
-    df = process_data_wrapper(raw, config)
-    return df
-
-
-forecast_df = load_forecast(config).copy()
+forecast_df = load_forecast()
 
 st.title("🌊 Bolinas Surf Forecast")
 st.caption("Your personalized surf, swell, wind, and tide dashboard.")

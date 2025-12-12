@@ -63,6 +63,7 @@ def fetch_ww3_timeseries(
         - Dir_deg : Mean wave direction (degrees)
         Index is datetime64 (tz-naive, Pacific-local timestamps).
     """
+    print('fetching ww3 data')
     if debug:
         return pd.DataFrame({
             "Hs_m":[1,1.5,2,2.5],
@@ -127,6 +128,7 @@ def fetch_cdip_029():
         - Tp_029_s : Peak period (s)
         - Dir_029_deg : Mean wave direction (degrees)
     """
+    print('fetching cdip data')
     cdip_url = (
         "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
         "cdip/archive/029p1/029p1_historic.nc"
@@ -174,6 +176,7 @@ def fetch_tide_predictions(
         Tide forecast indexed by localized datetime (Pacific), containing:
         - tide_height : float  Tide height in feet (MLLW)
     """
+    print('fetching tide data')
     station = Station(id=station_id)
 
     # Use Pacific time for begin/end dates
@@ -224,6 +227,7 @@ def fetch_wind_forecast(
         - wind_speed : float   Wind speed in mph
         - wind_direction : str Wind direction as compass abbreviation (e.g., "NW")
     """
+    print('fetching wind data')
     headers = {'User-Agent': 'BolinasSurfForecast/1.0 (surfforecast@example.com)'}
 
     # Get grid point
@@ -281,6 +285,7 @@ def fetch_sunrise_sunset(
         - first_light : datetime (Pacific)
         - last_light  : datetime (Pacific)
     """
+    print('fetching daylight data')
     sun_data = []
     start_date = datetime.now(pacific).date()  # Use Pacific time for start date
 

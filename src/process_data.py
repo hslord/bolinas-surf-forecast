@@ -388,7 +388,7 @@ def calculate_surf_score(
         w["baseline"] * 0.1
     )
 
-    return round(final_score, 1)
+    return round(final_score, 1), round(swell_score, 1), round(wind_score, 1), round(tide_score, 1)
 
 
 def process_data_wrapper(
@@ -420,6 +420,7 @@ def process_data_wrapper(
             Forecast dataframe containing hourly surf metrics and
             final surf scores.
     """
+    print('processing data')
 
     # Config references 
     surf_cfg = config["surf_model"]
@@ -498,7 +499,7 @@ def process_data_wrapper(
     forecast_df = pd.concat([forecast_df, surf_heights_df], axis=1)
 
     # 7. Predict surf score
-    forecast_df["surf_score"] = forecast_df.apply(
+    score_outputs = forecast_df.apply(
         lambda row: calculate_surf_score(
         #    row["Hs_029_pred_ft"],
             row["Tp_s"],
@@ -515,6 +516,32 @@ def process_data_wrapper(
         axis=1
     )
 
+    # # 7. Predict surf scores (all components returned separately)
+    # score_outputs = forecast_df.apply(
+    #     lambda row: calculate_surf_score(
+    #         row["Hs_029_pred_ft"],
+    #         row["Tp_s"],
+    #         row["Dir_deg"],
+    #         row["wind_speed"],
+    #         row["wind_direction"],
+    #         row["tide_height"],
+    #         row["bolinas_surf_min_ft"],
+    #         row["bolinas_surf_max_ft"],
+    #         row["swell_propagation"],
+    #         coast_orientation,
+    #         surf_cfg
+    #     ),
+    #     axis=1
+    # )
+
+    # score_outputs is a Series of tuples → expand into columns
+    forecast_df[[
+        "surf_score",
+        "swell_score_component",
+        "wind_score_component",
+        "tide_score_component"
+    ]] = pd.DataFrame(score_outputs.tolist(), index=forecast_df.index)
+
     # 8. Final fields (display order)
     forecast_df = forecast_df[[
         "surf_score",
@@ -526,6 +553,10 @@ def process_data_wrapper(
         "Hs_029_pred_ft",
         "Tp_s",
         "Dir_deg",
+        "swell_score_component",
+        "wind_score_component",
+        "tide_score_component",
+        "swell_propagation",
         "is_daylight"
     ]]
 
@@ -540,6 +571,10 @@ def process_data_wrapper(
         "Hs_029_pred_ft": "Swell Size (ft)",
         "Tp_s": "Swell Period (Seconds)",
         "Dir_deg": "Swell Direction (Degrees)",
+        "swell_score_component": "Swell Score (1-10)",
+        "wind_score_component": "Wind Score (1-10)",
+        "tide_score_component": "Tide Score (1-10)",
+        "swell_propagation": "Propagation Score (0-1)",
     })
 
     return forecast_df

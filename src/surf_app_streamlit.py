@@ -4,14 +4,6 @@ import altair as alt
 import yaml
 
 # ------------------------------------
-# LOAD CONFIG
-# ------------------------------------
-with open("../config/surf_config.yaml", "r") as f:
-    config = yaml.safe_load(f)
-
-st.set_page_config(page_title="Bolinas Surf Forecast", layout="wide")
-
-# ------------------------------------
 # DATA LOADING (pkl)
 # ------------------------------------
 @st.cache_data(show_spinner=True)

@@ -16,7 +16,9 @@ def load_forecast():
     df = process_data_wrapper(raw, config)
     return df
 
-# Resolve repo root
+forecast_df = load_forecast()
+
+# Resolve repo root and store df in .pkl file
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)

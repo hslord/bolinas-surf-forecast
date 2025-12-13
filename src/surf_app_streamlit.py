@@ -1,18 +1,21 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
+from pathlib import Path
 
 # ------------------------------------
 # DATA LOADING (pkl)
 # ------------------------------------
 @st.cache_data(show_spinner=True)
 def load_forecast():
-    try:
-        df = pd.read_pickle('data/forecast_df.pkl')
-        return df
-    except Exception as e:
-        st.sidebar.error(f"Failed loading forecast_df.pkl")
+    base_dir = Path(__file__).resolve().parents[1]  # repo root
+    pkl_path = base_dir / "data" / "forecast_df.pkl"
+
+    if not pkl_path.exists():
+        st.error(f"PKL file not found at: {pkl_path}")
         st.stop()
+
+    return pd.read_pickle(pkl_path)
 
 forecast_df = load_forecast()
 # Ensure datetime index (important for .pkl loads)

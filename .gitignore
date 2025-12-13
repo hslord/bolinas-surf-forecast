@@ -217,9 +217,8 @@ __pycache__/
 venv/
 .env/
 
-# Data files (do not commit local data)
+# Data files 
 *.nc
-data/
 
 # Large output images
 *.png

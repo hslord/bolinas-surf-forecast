@@ -8,10 +8,11 @@ import altair as alt
 @st.cache_data(show_spinner=True)
 def load_forecast():
     try:
-        df = pd.read_pickle('forecast_df.pkl')
+        df = pd.read_pickle('data/forecast_df.pkl')
         return df
     except Exception as e:
         st.sidebar.error(f"Failed loading forecast_df.pkl")
+        st.stop()
 
 forecast_df = load_forecast()
 # Ensure datetime index (important for .pkl loads)

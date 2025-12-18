@@ -245,7 +245,7 @@ st.dataframe(top10, use_container_width=True, height=300)
 # DAILY AVERAGES
 # =======================================================================================
 
-st.subheader("📊 Daily Surf Averages")
+st.subheader("📊 Daily Surf Averages (Daylight Only)")
 
 daylight_df["day"] = daylight_df["datetime"].dt.date
 

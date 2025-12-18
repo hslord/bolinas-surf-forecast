@@ -25,10 +25,6 @@ data_sources:
   # Number of hourly forecast points to pull & compute
   forecast_hours: 168       # 7 days (24 * 7)
 
-  # Streamlit parameters for using a locally run pipeline output 
-  # or running the pipeline in the streamlit app
-  use_local_pkl: true
-  local_pkl_path: "forecast_df.pkl"
 
 surf_model:
 

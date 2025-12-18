@@ -1,42 +1,26 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from fetch_data import fetch_data_wrapper
-from process_data import process_data_wrapper
-import yaml
+from pathlib import Path
 
 # ------------------------------------
-# LOAD CONFIG
-# ------------------------------------
-with open("../config/surf_config.yaml", "r") as f:
-    config = yaml.safe_load(f)
-
-st.set_page_config(page_title="Bolinas Surf Forecast", layout="wide")
-
-# ------------------------------------
-# DATA LOADING (pkl OR pipeline)
+# DATA LOADING (pkl)
 # ------------------------------------
 @st.cache_data(show_spinner=True)
-def load_forecast(config):
-    use_local = config["data_sources"].get("use_local_pkl")
-    pkl_path = config["data_sources"].get("local_pkl_path")
+def load_forecast():
+    base_dir = Path(__file__).resolve().parents[1]  # repo root
+    pkl_path = base_dir / "data" / "forecast_df.pkl"
 
-    # Option A — load from .pkl
-    if use_local:
-        try:
-            df = pd.read_pickle(pkl_path)
-            st.sidebar.success(f"Loaded forecast from local cache: {pkl_path}")
-            return df
-        except Exception as e:
-            st.sidebar.error(f"Failed loading .pkl ({e}) — falling back to full pipeline.")
+    if not pkl_path.exists():
+        st.error(f"PKL file not found at: {pkl_path}")
+        st.stop()
 
-    # Option B — run pipeline
-    raw = fetch_data_wrapper(config["data_sources"])
-    df = process_data_wrapper(raw, config)
-    return df
+    return pd.read_pickle(pkl_path)
 
-
-forecast_df = load_forecast(config).copy()
+forecast_df = load_forecast()
+# Ensure datetime index (important for .pkl loads)
+if not isinstance(forecast_df.index, pd.DatetimeIndex):
+    forecast_df.index = pd.to_datetime(forecast_df.index)
 
 st.title("🌊 Bolinas Surf Forecast")
 st.caption("Your personalized surf, swell, wind, and tide dashboard.")
@@ -261,7 +245,7 @@ st.dataframe(top10, use_container_width=True, height=300)
 # DAILY AVERAGES
 # =======================================================================================
 
-st.subheader("📊 Daily Surf Averages")
+st.subheader("📊 Daily Surf Averages (Daylight Only)")
 
 daylight_df["day"] = daylight_df["datetime"].dt.date
 

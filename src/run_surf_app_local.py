@@ -2,6 +2,8 @@ import pandas as pd
 from fetch_data import fetch_data_wrapper
 from process_data import process_data_wrapper
 import yaml
+from pathlib import Path
+
 
 # Use this file to run pickle the surf forecast locally
 
@@ -15,4 +17,10 @@ def load_forecast():
     return df
 
 forecast_df = load_forecast()
-forecast_df.to_pickle("forecast_df.pkl")
+
+# Resolve repo root and store df in .pkl file
+BASE_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
+
+forecast_df.to_pickle(DATA_DIR / "forecast_df.pkl")

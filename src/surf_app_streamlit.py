@@ -25,9 +25,171 @@ if not isinstance(forecast_df.index, pd.DatetimeIndex):
 st.title("🌊 Bolinas Surf Forecast")
 st.caption("Your personalized surf, swell, wind, and tide dashboard.")
 
+
 # =======================================================================================
-# DAY/NIGHT SHADING UTILITIES
+# SUMMARY CARDS
 # =======================================================================================
+
+st.subheader("🏄 Quick Surf Summary")
+
+col1, col2, col3 = st.columns(3)
+
+current = forecast_df.iloc[0]
+daylight_df = (
+    forecast_df[forecast_df["is_daylight"]]
+    .reset_index(names="datetime")
+)
+best_row = daylight_df.loc[
+    daylight_df["Surf Score (1-10)"].idxmax()
+]
+
+col1.metric(
+    "Current Surf",
+    f"{current['Surf Height Min (ft)']}–{current['Surf Height Max (ft)']} ft",
+)
+
+col2.metric(
+    "Current Score",
+    f"{current['Surf Score (1-10)']}/10",
+)
+
+col3.metric(
+    "Best Upcoming Window",
+    f"{best_row['Surf Score (1-10)']}/ {best_row['Surf Height Min (ft)']}–{best_row['Surf Height Max (ft)']} ft",
+    help=best_row["datetime"].strftime("%b %d, %I:%M %p"),
+)
+
+
+# =======================================================================================
+# SURF QUALITY BREAKDOWN PANEL
+# =======================================================================================
+
+st.subheader("🔎 Surf Quality Breakdown")
+
+# Build timestamp list for selectbox
+timestamps = list(forecast_df.index)
+
+# Safe default: highest surf score timestamp
+best_timestamp = forecast_df["Surf Score (1-10)"].idxmax()
+default_idx = timestamps.index(best_timestamp)
+
+selected_time = st.selectbox(
+    "Select a forecast time to inspect:",
+    options=timestamps,
+    index=default_idx,
+    format_func=lambda t: t.strftime("%b %d, %I:%M %p"),
+)
+
+row = forecast_df.loc[selected_time]
+
+# Helper for small secondary text
+def small(text, size):
+    return f"<span style='font-size:{size}rem; color:#666;'>{text}</span>"
+
+# ---- Horizontal Layout ----
+col1, col2, col3, col4 = st.columns(4)
+
+# Column 1 – Surf + Propagation
+col1.metric("Surf Score", f"{row['Surf Score (1-10)']}/10")
+col1.markdown(
+    small(
+        f"Propagation {row['Dominant Propagation Score (0-1)']:.2f} from "
+        f"{row['Dominant Swell Direction']:.1f}°",
+        0.90
+    ),
+    unsafe_allow_html=True
+)
+
+# Column 2 – Swell
+col2.metric("Swell Score", f"{row['Dominant Swell Score (1-10)']}/10")
+col2.markdown(
+    small(
+        f"{round(float(row['Dominant Swell Size (ft)']), 1)} ft @ "
+        f"{round(float(row['Dominant Swell Period']), 1)}s",
+        0.95
+    ),
+    unsafe_allow_html=True
+)
+
+# Column 3 – Wind
+col3.metric("Wind Score", f"{row['Wind Score (1-10)']}/10")
+col3.markdown(
+    small(f"{int(row['Wind Speed (MPH)'])} mph w gusts to {int(row['Wind Gust (MPH)'])} {row['Wind Direction']}",
+          0.9
+          ),
+    unsafe_allow_html=True
+)
+
+# Column 4 – Tide
+col4.metric("Tide Score", f"{row['Tide Score (1-10)']}/10")
+col4.markdown(
+    small(f"{row['Tide Height (ft)']} ft",
+          0.95
+          ),
+    unsafe_allow_html=True
+)
+
+
+# =======================================================================================
+# TOP 10 SURF WINDOWS
+# =======================================================================================
+
+st.subheader("🏆 Top Surf Windows (Daylight Only)")
+
+#round key columns for visualization
+def format_for_display(df: pd.DataFrame):
+    df = df.copy()
+    df["Wind Speed (MPH)"] = df["Wind Speed (MPH)"].round(0)
+    df["Wind Gust (MPH)"] = df["Wind Gust (MPH)"].round(0)
+    df["Tide Height (ft)"] = df["Tide Height (ft)"].round(1)
+    df["Dominant Swell Size (ft)"] = df["Dominant Swell Size (ft)"].round(1)
+    df["Dominant Swell Period"] = df["Dominant Swell Period"].round(0)
+    df["Dominant Swell Direction"] = df["Dominant Swell Direction"].round(0)
+    df["Dominant Propagation Score (0-1)"] = df["Dominant Propagation Score (0-1)"].round(1)
+    df["Secondary Swell Size (ft)"] = df["Secondary Swell Size (ft)"].round(1)
+    df["Secondary Swell Period"] = df["Secondary Swell Period"].round(0)
+    df["Secondary Swell Direction"] = df["Secondary Swell Direction"].round(0)
+    df["Secondary Propagation Score (0-1)"] = df["Secondary Propagation Score (0-1)"].round(1)
+    return df
+
+daylight_df = format_for_display(daylight_df)
+
+top10 = daylight_df.nlargest(10, "Surf Score (1-10)")
+st.dataframe(top10, use_container_width=True, height=300)
+
+# =======================================================================================
+# DAILY AVERAGES
+# =======================================================================================
+
+st.subheader("📊 Daily Surf Averages (Daylight Only)")
+
+daylight_df["day"] = daylight_df["datetime"].dt.date
+
+numeric_cols = [
+    "Surf Score (1-10)", 
+    "Surf Height Min (ft)",
+    "Surf Height Max (ft)",
+    "Dominant Swell Size (ft)",
+    "Dominant Swell Period",
+    "Dominant Swell Direction"
+]
+
+daily_avg_df = (
+    daylight_df.groupby("day")[numeric_cols]
+    .mean()
+    .round(2)
+    .reset_index()
+)
+
+st.dataframe(daily_avg_df, use_container_width=True)
+
+# =======================================================================================
+# TIME SERIES EXPLORER 
+# =======================================================================================
+
+st.subheader("📈 Time Series Explorer")
+
+# UTILITIES
 
 def build_night_rects(df):
     """
@@ -79,7 +241,7 @@ def add_daylight_shading(line_chart, df):
 
 def alt_chart(df, y_col, y_title, domain=None, color="steelblue"):
     """Unified line chart with visible night shading."""
-    base = df.reset_index()
+    base = df.reset_index(names="datetime")
 
     y_enc = alt.Y(
         f"{y_col}:Q",
@@ -91,10 +253,10 @@ def alt_chart(df, y_col, y_title, domain=None, color="steelblue"):
         alt.Chart(base)
         .mark_line(color=color)
         .encode(
-            x=alt.X("index:T", title="Date/Time"),
+            x=alt.X("datetime:T", title="Date/Time"),
             y=y_enc,
             tooltip=[
-                alt.Tooltip("index:T", title="Time"),
+                alt.Tooltip("datetime:T", title="Time"),
                 alt.Tooltip(f"{y_col}:Q", title=y_title),
             ],
         )
@@ -103,175 +265,48 @@ def alt_chart(df, y_col, y_title, domain=None, color="steelblue"):
 
     return add_daylight_shading(line, base)
 
-# =======================================================================================
-# SIDEBAR FILTERS
-# =======================================================================================
-
-st.sidebar.header("Filters")
-
-available_dates = (
-    pd.Series(forecast_df.index.date)
-    .drop_duplicates()
-    .sort_values()
-    .tolist()
-)
-
-selected_dates = st.sidebar.multiselect(
-    "Select dates",
-    options=available_dates,
-    default=[]
-)
-
-daylight_only = st.sidebar.checkbox("Daylight hours only (tables only)", value=True)
-
-filtered = forecast_df.copy()
-idx_dates = pd.Series(filtered.index.date, index=filtered.index)
-
-if selected_dates:
-    filtered = filtered[idx_dates.isin(selected_dates)]
-
-# ❗ Only apply daylight filter to tables — NOT to time series
-filtered_for_tables = filtered.copy()
-if daylight_only:
-    filtered_for_tables = filtered_for_tables[filtered_for_tables["is_daylight"]]
-
-# =======================================================================================
-# SUMMARY CARDS
-# =======================================================================================
-
-st.subheader("🏄 Quick Surf Summary")
-
-col1, col2, col3 = st.columns(3)
-
-current = forecast_df.iloc[0]
-best_row = forecast_df.loc[forecast_df["Surf Score (1-10)"].idxmax()]
-
-col1.metric(
-    "Current Surf",
-    f"{current['Surf Height Min (ft)']}–{current['Surf Height Max (ft)']} ft",
-)
-
-col2.metric(
-    "Current Score",
-    f"{current['Surf Score (1-10)']}/10",
-)
-
-col3.metric(
-    "Best Upcoming Window",
-    f"{best_row['Surf Height Min (ft)']}–{best_row['Surf Height Max (ft)']} ft",
-    help=f"{best_row.name:%b %d, %I:%M %p}",
-)
-
-# =======================================================================================
-# SURF QUALITY BREAKDOWN PANEL
-# =======================================================================================
-
-st.subheader("🔎 Surf Quality Breakdown")
-
-# Build timestamp list for selectbox
-timestamps = list(forecast_df.index)
-
-# Safe default: highest surf score timestamp
-best_timestamp = forecast_df["Surf Score (1-10)"].idxmax()
-default_idx = timestamps.index(best_timestamp)
-
-selected_time = st.selectbox(
-    "Select a forecast time to inspect:",
-    options=timestamps,
-    index=default_idx,
-    format_func=lambda t: t.strftime("%b %d, %I:%M %p"),
-)
-
-row = forecast_df.loc[selected_time]
-
-# ---- Horizontal Layout ----
-col1, col2, col3, col4 = st.columns(4)
-
-# Helper for small secondary text
-def small(text):
-    return f"<span style='font-size:0.95rem; color:#666;'>{text}</span>"
-
-# Column 1 – Surf + Propagation
-col1.metric("Surf Score", f"{row['Surf Score (1-10)']}/10")
-col1.markdown(
-    small(
-        f"Propagation: {row['Propagation Score (0-1)']:.2f} — from "
-        f"{round(float(row['Swell Direction (Degrees)']),1)}°"
-    ),
-    unsafe_allow_html=True
-)
-
-# Column 2 – Swell
-col2.metric("Swell Score", f"{row['Swell Score (1-10)']}/10")
-col2.markdown(
-    small(
-        f"{round(float(row['Swell Size (ft)']), 1)} ft @ "
-        f"{round(float(row['Swell Period (Seconds)']), 1)}s"
-    ),
-    unsafe_allow_html=True
-)
-
-# Column 3 – Wind
-col3.metric("Wind Score", f"{row['Wind Score (1-10)']}/10")
-col3.markdown(
-    small(f"{row['Wind Speed (MPH)']} mph {row['Wind Direction (Degrees)']}°"),
-    unsafe_allow_html=True
-)
-
-# Column 4 – Tide
-col4.metric("Tide Score", f"{row['Tide Score (1-10)']}/10")
-col4.markdown(
-    small(f"{row['Tide Height (ft)']} ft"),
-    unsafe_allow_html=True
-)
+def alt_wind_with_gusts(df):
+    """
+    Wind chart with sustained wind + gust overlay.
+    """
+    base = df.reset_index(names="datetime")
 
 
-# =======================================================================================
-# TOP 10 SURF WINDOWS
-# =======================================================================================
+    # Sustained wind
+    wind_line = (
+        alt.Chart(base)
+        .mark_line(color="green")
+        .encode(
+            x=alt.X("datetime:T", title="Date/Time"),
+            y=alt.Y(
+                "Wind Speed (MPH):Q",
+                title="Wind Speed (mph)",
+                scale=alt.Scale(domain=[0, 30]),
+            ),
+            tooltip=[
+                alt.Tooltip("datetime:T", title="Time"),
+                alt.Tooltip("Wind Speed (MPH):Q", title="Wind Speed (mph)", format=".0f"),
+            ],
+        )
+    )
 
-st.subheader("🏆 Top Surf Windows (Daylight Only)")
+    # Gusts (dashed)
+    gust_line = (
+        alt.Chart(base)
+        .mark_line(color="darkgreen", strokeDash=[4, 4], opacity=0.7)
+        .encode(
+            x="datetime:T",
+            y=alt.Y("Wind Gust (MPH):Q"),
+            tooltip=[
+                alt.Tooltip("Wind Gust (MPH):Q", title="Wind Gust (mph)", format=".0f"),
+            ],
+        )
+    )
 
-daylight_df = (
-    forecast_df[forecast_df["is_daylight"]]
-    .reset_index()
-    .rename(columns={"index": "datetime"})
-)
+    chart = (wind_line + gust_line).properties(height=220)
 
-top10 = daylight_df.nlargest(10, "Surf Score (1-10)")
-st.dataframe(top10, use_container_width=True, height=300)
+    return add_daylight_shading(chart, base)
 
-# =======================================================================================
-# DAILY AVERAGES
-# =======================================================================================
-
-st.subheader("📊 Daily Surf Averages (Daylight Only)")
-
-daylight_df["day"] = daylight_df["datetime"].dt.date
-
-numeric_cols = [
-    "Surf Score (1-10)", 
-    "Surf Height Min (ft)",
-    "Surf Height Max (ft)",
-    "Swell Size (ft)",
-    "Swell Period (Seconds)",
-    "Swell Direction (Degrees)"
-]
-
-daily_avg_df = (
-    daylight_df.groupby("day")[numeric_cols]
-    .mean()
-    .round(2)
-    .reset_index()
-)
-
-st.dataframe(daily_avg_df, use_container_width=True)
-
-# =======================================================================================
-# TIME SERIES EXPLORER (NO DAYLIGHT FILTER)
-# =======================================================================================
-
-st.subheader("📈 Time Series Explorer")
 
 # Important: ALWAYS use unfiltered forecast_df for shading accuracy
 unfiltered = forecast_df.copy()
@@ -294,7 +329,7 @@ with tab2:
 
 with tab3:
     st.altair_chart(
-        alt_chart(unfiltered, "Wind Speed (MPH)", "Wind Speed (mph)", domain=[0, 30], color="green"),
+        alt_wind_with_gusts(unfiltered),
         use_container_width=True
     )
 
@@ -305,8 +340,12 @@ with tab4:
     )
 
 # =======================================================================================
-# RAW TABLE (WITH OPTIONAL DAYLIGHT FILTER)
+# RAW TABLE 
 # =======================================================================================
 
 st.subheader("📄 Full Forecast Data")
-st.dataframe(filtered_for_tables, use_container_width=True, height=350)
+
+#round key columns for visualization
+unfiltered = format_for_display(unfiltered)
+
+st.dataframe(unfiltered, use_container_width=True, height=350)

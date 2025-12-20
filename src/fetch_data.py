@@ -36,125 +36,169 @@ def detect_var(
             return v
     return None
 
-
 def fetch_ww3_timeseries(
     lat_valid: float,
     lon_valid: float,
-    debug: bool = False
+    max_partitions: int,
+    forecast_hours: int,
+    url: str,
 ):
     """
-    Extract a WW3 timeseries at a validated grid point.
-
-    Parameters
-    ----------
-    lat_valid : float
-        Latitude of a known valid WW3 ocean grid point.
-    lon_valid : float
-        Longitude in 0-360 convention for the WW3 grid point.
-    debug : bool, optional
-        If True, prints extra information useful for development.
+    Extract a partitioned WW3 swell timeseries at a validated grid point.
 
     Returns
     -------
     pandas.DataFrame
-        Hourly WW3 time series with columns:
-        - Hs_m : Significant wave height (m)
-        - Tp_s : Peak period (s)
-        - Dir_deg : Mean wave direction (degrees)
-        Index is datetime64 (tz-naive, Pacific-local timestamps).
+        Long-form dataframe with:
+        - index: forecast-valid time (tz-naive, Pacific)
+        - columns: swell_idx, Hs_m, Tp_s, Dir_deg
+        - one row per (time, swell_idx)
     """
-    print('fetching ww3 data')
-    if debug:
-        return pd.DataFrame({
-            "Hs_m":[1,1.5,2,2.5],
-            "Tp_s":[10,11,12,13],
-            "Dir_deg":[270,260,250,240]
-        }, index=pd.date_range("2025-01-01", periods=4, freq="H"))
 
-    # Open remote WW3 dataset
-    url = "https://thredds.ucar.edu/thredds/dodsC/grib/NCEP/WW3/Global/Best"
+    # -------------------------------------------------
+    # 1) Open dataset
+    # -------------------------------------------------
     ds = xr.open_dataset(url, engine="netcdf4")
 
-    # Detect coordinate names
+    # -------------------------------------------------
+    # 2) Detect coordinate names
+    # -------------------------------------------------
     latname = next(c for c in ds.coords if "lat" in c.lower())
     lonname = next(c for c in ds.coords if "lon" in c.lower())
 
-    # Detect WW3 variables robustly  
-    var_hs  = detect_var(ds, ["significant", "combined", "wave"])
-    var_tp  = detect_var(ds, ["primary", "mean", "period"])
-    var_dir = detect_var(ds, ["primary", "direction"])
+    if "time" not in ds.coords:
+        raise RuntimeError("WW3 dataset missing forecast-valid 'time' coordinate")
 
-    if not all([var_hs, var_tp, var_dir]):
-        raise RuntimeError(
-            f"Could not detect WW3 wave variables. Available vars:\n{list(ds.data_vars)}"
-        )
+    timename = "time"
 
-    # Extract raw time series
-    hs = ds[var_hs].sel({latname: lat_valid, lonname: lon_valid}, method="nearest").to_pandas()
-    tp = ds[var_tp].sel({latname: lat_valid, lonname: lon_valid}, method="nearest").to_pandas()
-    dr = ds[var_dir].sel({latname: lat_valid, lonname: lon_valid}, method="nearest").to_pandas()
+    # Longitude convention handling
+    lon_coord = ds[lonname]
+    lon_val = float(lon_valid)
+    if float(lon_coord.max()) <= 180.0 and lon_val > 180.0:
+        lon_val -= 360.0
 
-    # Build dataframe
-    df = pd.DataFrame({
-        "Hs_m": hs,
-        "Tp_s": tp,
-        "Dir_deg": dr
-    }).dropna()
+    # -------------------------------------------------
+    # 3) Partitioned swell variables
+    # -------------------------------------------------
+    var_hs = "Significant_height_of_swell_waves_ordered_sequence_of_data"
+    var_tp = "Mean_period_of_swell_waves_ordered_sequence_of_data"
+    var_dir = "Direction_of_swell_waves_ordered_sequence_of_data"
 
-    # Convert UTC → Pacific, then drop timezone
-    df.index = (
-        df.index.tz_localize("UTC")
-                .tz_convert(pacific)
-                .tz_localize(None)
+    for v in (var_hs, var_tp, var_dir):
+        if v not in ds.data_vars:
+            raise RuntimeError(f"Missing WW3 variable: {v}")
+
+    part_dim = next(
+        d for d in ds[var_hs].dims if "sequence" in d.lower()
     )
+
+    # -------------------------------------------------
+    # 4) Forecast time window (UTC, tz-naive)
+    # -------------------------------------------------
+    start_pacific = datetime.now(pacific).replace(
+        minute=0, second=0, microsecond=0
+    )
+    end_pacific = start_pacific + timedelta(hours=int(forecast_hours))
+
+    start_utc = (
+        pd.Timestamp(start_pacific)
+        .tz_convert("UTC")
+        .tz_localize(None)
+    )
+    end_utc = (
+        pd.Timestamp(end_pacific)
+        .tz_convert("UTC")
+        .tz_localize(None)
+    )
+
+    # -------------------------------------------------
+    # 5) Lazy subset (forecast-valid time ONLY)
+    # -------------------------------------------------
+    sub = xr.Dataset(
+        {
+            "Hs_m": ds[var_hs],
+            "Tp_s": ds[var_tp],
+            "Dir_deg": ds[var_dir],
+        }
+    )
+
+    # Nearest spatial point
+    sub = sub.sel(
+        {latname: lat_valid, lonname: lon_val},
+        method="nearest",
+    )
+
+    # Forecast window — ONLY forecast-valid time
+    sub = sub.sel({"time": slice(start_utc, end_utc)})
+
+    # Partition limit
+    sub = sub.isel({part_dim: slice(0, int(max_partitions))})
+
+    # -------------------------------------------------
+    # 6) Align any variables that use time1 → time
+    # -------------------------------------------------
+    tvals = sub["time"].values
+
+    for var in ["Hs_m", "Tp_s", "Dir_deg"]:
+        if "time1" in sub[var].dims:
+            aligned = (
+                sub[var]
+                .sel(time1=tvals)
+                .assign_coords({"time": ("time1", tvals)})
+                .swap_dims({"time1": "time"})
+            )
+            sub[var] = aligned
+
+    # Drop time1 everywhere (hard guarantee)
+    if "time1" in sub.coords:
+        sub = sub.drop_vars("time1")
+
+    # Final sanity check
+    for v in ["Hs_m", "Tp_s", "Dir_deg"]:
+        if "time" not in sub[v].dims:
+            raise RuntimeError(
+                f"{v} is not aligned to forecast-valid time; dims={sub[v].dims}"
+            )
+
+    # -------------------------------------------------
+    # 7) Load aligned dataset
+    # -------------------------------------------------
+    sub = sub.load()
+
+    # -------------------------------------------------
+    # 8) Convert to long-form pandas
+    # -------------------------------------------------
+    sub = sub.reset_coords(drop=True)
+    stacked = sub.stack(_row=("time", part_dim))
+
+    df = (
+        stacked
+        .to_dataframe()[["Hs_m", "Tp_s", "Dir_deg"]]
+        .reset_index()
+    )
+
+    df = df.rename(columns={part_dim: "swell_idx"})
+
+    df = df.dropna(subset=["Hs_m", "Tp_s", "Dir_deg"])
+    df = df[df["Hs_m"] > 0]
+
+    # Convert time to Pacific tz-naive
+    df["time"] = (
+        pd.to_datetime(df["time"], utc=True)
+        .dt.tz_convert(pacific)
+        .dt.tz_localize(None)
+    )
+
+    df = df.set_index("time").sort_index()
+
+    # Enforce dtypes
+    df["swell_idx"] = df["swell_idx"].astype(int, errors="ignore")
+    df["Hs_m"] = df["Hs_m"].astype(float, errors="ignore")
+    df["Tp_s"] = df["Tp_s"].astype(float, errors="ignore")
+    df["Dir_deg"] = df["Dir_deg"].astype(float, errors="ignore")
 
     return df
 
-
-def fetch_cdip_029():
-    """
-    Fetch and process CDIP 029 (Point Bonita) historical swell data.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    pandas.DataFrame
-        3-hourly CDIP observations indexed by datetime (UTC-naive)
-        with columns:
-        - Hs_029_m : Significant wave height (m)
-        - Tp_029_s : Peak period (s)
-        - Dir_029_deg : Mean wave direction (degrees)
-    """
-    print('fetching cdip data')
-    cdip_url = (
-        "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
-        "cdip/archive/029p1/029p1_historic.nc"
-    )
-
-    ds = xr.open_dataset(cdip_url, engine="netcdf4")
-
-    # --- Detect time + variables ---
-    time_var = next(c for c in ds.coords if "time" in c.lower())
-    var_hs  = next(v for v in ds.data_vars if "wavehs"  in v.lower())
-    var_tp  = next(v for v in ds.data_vars if "wavetp"  in v.lower())
-    var_dir = next(v for v in ds.data_vars if "wavedir" in v.lower() or "wavedp" in v.lower())
-
-    # --- Convert to pandas ---
-    t = pd.to_datetime(ds[time_var].values).tz_localize(None)
-
-    cdip_df = pd.DataFrame({
-        "Hs_029_m": ds[var_hs].values,
-        "Tp_029_s": ds[var_tp].values,
-        "Dir_029_deg": ds[var_dir].values,
-    }, index=t).dropna()
-
-    # --- Downsample to match WW3's 3-hourly spacing ---
-    cdip_3h = cdip_df.resample("3h").mean()
-
-    return cdip_3h
 
 def fetch_tide_predictions(
     station_id: str,
@@ -206,59 +250,114 @@ def fetch_tide_predictions(
 
     return df
 
-def fetch_wind_forecast(
-    lat: float, 
-    lon: float):
+# def fetch_wind_forecast(
+#     lat: float, 
+#     lon: float):
+#     """
+#     Fetch NWS wind forecast and return hourly wind speed and direction
+#     in Pacific local time (PST/PDT).
+
+#     Parameters
+#     ----------
+#     lat : float
+#         Latitude of forecast location (decimal degrees).
+#     lon : float
+#         Longitude of forecast location (decimal degrees).
+
+#     Returns
+#     -------
+#     pandas.DataFrame
+#         Wind forecast indexed by localized datetime (Pacific), containing:
+#         - wind_speed : float   Wind speed in mph
+#         - wind_direction : str Wind direction as compass abbreviation (e.g., "NW")
+#     """
+#     print('fetching wind data')
+#     headers = {'User-Agent': 'BolinasSurfForecast/1.0 (surfforecast@example.com)'}
+
+#     # Get grid point
+#     point_url = f"https://api.weather.gov/points/{lat},{lon}"
+#     point_response = requests.get(point_url, headers=headers, timeout=30)
+#     point_response.raise_for_status()
+#     point_data = point_response.json()
+
+#     # Get hourly forecast
+#     forecast_url = point_data['properties']['forecastHourly']
+#     forecast_response = requests.get(forecast_url, headers=headers, timeout=30)
+#     forecast_response.raise_for_status()
+#     forecast_data = forecast_response.json()
+
+#     # Parse into DataFrame
+#     periods = forecast_data['properties']['periods']
+
+#     wind_data = []
+#     for period in periods:
+#         # Parse datetime with timezone awareness, then convert to Pacific
+#         dt = pd.to_datetime(period['startTime'], utc=True).tz_convert(pacific).tz_localize(None)
+
+#         wind_data.append({
+#             'datetime': dt,
+#             'wind_speed': float(period['windSpeed'].split()[0]),
+#             'wind_direction': period['windDirection'],
+#             'temperature': period['temperature']
+#         })
+
+#     df = pd.DataFrame(wind_data).set_index("datetime").sort_index()
+#     return df
+
+def fetch_wind_forecast(lat: float, lon: float):
     """
-    Fetch NWS wind forecast and return hourly wind speed and direction
-    in Pacific local time (PST/PDT).
-
-    Parameters
-    ----------
-    lat : float
-        Latitude of forecast location (decimal degrees).
-    lon : float
-        Longitude of forecast location (decimal degrees).
-
-    Returns
-    -------
-    pandas.DataFrame
-        Wind forecast indexed by localized datetime (Pacific), containing:
-        - wind_speed : float   Wind speed in mph
-        - wind_direction : str Wind direction as compass abbreviation (e.g., "NW")
+    Fetch NWS wind forecast (hourly) with sustained wind and gusts.
     """
-    print('fetching wind data')
-    headers = {'User-Agent': 'BolinasSurfForecast/1.0 (surfforecast@example.com)'}
 
-    # Get grid point
+    headers = {
+        "User-Agent": "BolinasSurfForecast/1.0 (surfforecast@example.com)"
+    }
+
+    # -------------------------------------------------
+    # 1) Resolve gridpoint
+    # -------------------------------------------------
     point_url = f"https://api.weather.gov/points/{lat},{lon}"
-    point_response = requests.get(point_url, headers=headers, timeout=30)
-    point_response.raise_for_status()
-    point_data = point_response.json()
+    point_data = requests.get(point_url, headers=headers, timeout=30).json()
 
-    # Get hourly forecast
-    forecast_url = point_data['properties']['forecastHourly']
-    forecast_response = requests.get(forecast_url, headers=headers, timeout=30)
-    forecast_response.raise_for_status()
-    forecast_data = forecast_response.json()
+    props = point_data["properties"]
+    grid_id = props["gridId"]
+    grid_x = props["gridX"]
+    grid_y = props["gridY"]
 
-    # Parse into DataFrame
-    periods = forecast_data['properties']['periods']
+    # -------------------------------------------------
+    # 2) Fetch gridpoint forecast data
+    # -------------------------------------------------
+    grid_url = f"https://api.weather.gov/gridpoints/{grid_id}/{grid_x},{grid_y}"
+    grid_data = requests.get(grid_url, headers=headers, timeout=30).json()
 
-    wind_data = []
-    for period in periods:
-        # Parse datetime with timezone awareness, then convert to Pacific
-        dt = pd.to_datetime(period['startTime'], utc=True).tz_convert(pacific).tz_localize(None)
+    wind_speed_ts = grid_data["properties"]["windSpeed"]["values"]
+    wind_gust_ts = grid_data["properties"]["windGust"]["values"]
+    wind_dir_ts = grid_data["properties"]["windDirection"]["values"]
 
-        wind_data.append({
-            'datetime': dt,
-            'wind_speed': float(period['windSpeed'].split()[0]),
-            'wind_direction': period['windDirection'],
-            'temperature': period['temperature']
+    rows = []
+
+    for ws, wg, wd in zip(wind_speed_ts, wind_gust_ts, wind_dir_ts):
+        dt = (
+            pd.to_datetime(ws["validTime"].split("/")[0], utc=True)
+            .tz_convert(pacific)
+            .tz_localize(None)
+        )
+
+        rows.append({
+            "datetime": dt,
+            "wind_speed": ws["value"] * 0.621371 if ws["value"] is not None else np.nan,  # m/s → mph
+            "wind_gust": wg["value"] * 0.621371 if wg["value"] is not None else np.nan,
+            "wind_direction": wd["value"],
         })
 
-    df = pd.DataFrame(wind_data).set_index("datetime").sort_index()
+    df = (
+        pd.DataFrame(rows)
+        .set_index("datetime")
+        .sort_index()
+    )
+
     return df
+
 
 def fetch_sunrise_sunset(
     lat: float, 
@@ -339,24 +438,23 @@ def fetch_data_wrapper(data_sources: Dict):
     ww3_df = fetch_ww3_timeseries(
         data_sources["ww3_lat"],
         data_sources["ww3_lon"],
-        debug=data_sources.get("debug", False)
+        data_sources["max_partitions"],
+        data_sources["forecast_hours"],
+        data_sources["ww3_url"]
     )
 
-    # 2. buoy observations (CDIP 029)
-    cdip_df = fetch_cdip_029()
-
-    # 3. tides
+    # 2. tides
     tide_df = fetch_tide_predictions(
         data_sources["tide_station"]
     )
 
-    # 4. wind (NWS API)
+    # 3. wind (NWS API)
     wind_df = fetch_wind_forecast(
         data_sources["location_lat"],
         data_sources["location_lon"]
     )
 
-    # 5. sunrise/sunset (NOAA external API)
+    # 4. sunrise/sunset (NOAA external API)
     sun_df = fetch_sunrise_sunset(
         data_sources["location_lat"],
         data_sources["location_lon"]
@@ -364,7 +462,6 @@ def fetch_data_wrapper(data_sources: Dict):
 
     return {
         "ww3": ww3_df,
-        "cdip": cdip_df,
         "tide": tide_df,
         "wind": wind_df,
         "sun": sun_df,

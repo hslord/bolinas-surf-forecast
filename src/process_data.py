@@ -341,13 +341,16 @@ def calculate_surf_score(
     Returns
         float: Final surf score 0-10 (rounded to 0.1)
     """
-
-    # 1. SWELL SCORE
+    # 1. SWELL SCORE — Bolinas-first
     if pd.isna(bolinas_surf_min_ft) or pd.isna(period_s):
-        swell_score = 0
-        energy = 0
+        swell_score = 0.0
+        energy = 0.0
+    elif swell_propagation <= 0.05:
+        # Hard block: swell does not meaningfully reach Bolinas
+        swell_score = 0.05
+        energy = 0.05
     else:
-        # logistic period multiplier
+        # Period multiplier (quality only)
         pm = surf_model["period_multiplier"]
         period_mult = (
             pm["min"] +
@@ -355,38 +358,23 @@ def calculate_surf_score(
             (1 + np.exp(-pm["steepness"] * (period_s - pm["midpoint"])))
         )
 
+        # Period only matters if swell actually wraps
+        period_mult *= swell_propagation ** 0.75
+
+        # Nearshore height proxy
         nearshore_h = 0.5 * (bolinas_surf_min_ft + bolinas_surf_max_ft)
 
-        # energy law
+        # Energy = height only
         eg = surf_model["energy"]
-        energy = nearshore_h**eg["height_exp"] * period_s**eg["period_exp"]
+        energy = nearshore_h ** eg["height_exp"]
 
-        # shape multiplier from propagation
-        shape_mult = 0.8 + 0.3 * swell_propagation
+        # Propagation as gate
+        swell_raw = energy * period_mult * swell_propagation
 
-        swell_raw = energy * period_mult * shape_mult
-        swell_score = 10 * (1 - np.exp(-eg["swell_saturation"] * swell_raw))
+        swell_score = 10 * (
+            1 - np.exp(-0.7 * eg["swell_saturation"] * swell_raw)
+        )
 
-    # # 2. WIND SCORE
-    # if pd.isna(wind_speed):
-    #     wind_score = 5
-    # else:
-    #     # flip directions 
-    #     wind_toward_deg = (wind_direction + 180) % 360
-
-    #     wind_angle = abs(wind_toward_deg - coast_orientation)
-    #     if wind_angle > 180:
-    #         wind_angle = 360 - wind_angle
-
-    #     offshore_quality = np.cos(np.deg2rad(wind_angle))
-    #     speed_quality = 1 / (1 + np.exp((wind_speed - 8) / 2))
-
-    #     if offshore_quality >= 0:
-    #         raw_wind = offshore_quality * speed_quality
-    #     else:
-    #         raw_wind = offshore_quality * (1 - speed_quality)
-
-    #     wind_score = (raw_wind + 1) * 5
 
     # 2. WIND SCORE
     if pd.isna(wind_speed):
@@ -554,12 +542,12 @@ def aggregate_hourly_partitions(group: pd.DataFrame):
 
     # -------------------------------------------------
     # Rank partitions by Bolinas surf relevance
-    # Primary: nearshore surf height
+    # Primary: nearshore swell score
     # Secondary: offshore energy (tie-breaker)
     # -------------------------------------------------
-    group["bolinas_surf_max_ft"] = group["bolinas_surf_max_ft"].fillna(0.0)
+    group["partition_swell_score"] = group["partition_swell_score"].fillna(0.0)
     ranked = group.sort_values(
-        by=["bolinas_surf_max_ft", "partition_energy"],
+        by=["partition_swell_score", "partition_energy"],
         ascending=[False, False],
     )
 

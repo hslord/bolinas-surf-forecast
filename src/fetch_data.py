@@ -197,6 +197,9 @@ def fetch_ww3_timeseries(
     df["Tp_s"] = df["Tp_s"].astype(float, errors="ignore")
     df["Dir_deg"] = df["Dir_deg"].astype(float, errors="ignore")
 
+    #temp download
+    df.to_csv('ww3_partitions.csv')
+
     return df
 
 
@@ -250,59 +253,6 @@ def fetch_tide_predictions(
 
     return df
 
-# def fetch_wind_forecast(
-#     lat: float, 
-#     lon: float):
-#     """
-#     Fetch NWS wind forecast and return hourly wind speed and direction
-#     in Pacific local time (PST/PDT).
-
-#     Parameters
-#     ----------
-#     lat : float
-#         Latitude of forecast location (decimal degrees).
-#     lon : float
-#         Longitude of forecast location (decimal degrees).
-
-#     Returns
-#     -------
-#     pandas.DataFrame
-#         Wind forecast indexed by localized datetime (Pacific), containing:
-#         - wind_speed : float   Wind speed in mph
-#         - wind_direction : str Wind direction as compass abbreviation (e.g., "NW")
-#     """
-#     print('fetching wind data')
-#     headers = {'User-Agent': 'BolinasSurfForecast/1.0 (surfforecast@example.com)'}
-
-#     # Get grid point
-#     point_url = f"https://api.weather.gov/points/{lat},{lon}"
-#     point_response = requests.get(point_url, headers=headers, timeout=30)
-#     point_response.raise_for_status()
-#     point_data = point_response.json()
-
-#     # Get hourly forecast
-#     forecast_url = point_data['properties']['forecastHourly']
-#     forecast_response = requests.get(forecast_url, headers=headers, timeout=30)
-#     forecast_response.raise_for_status()
-#     forecast_data = forecast_response.json()
-
-#     # Parse into DataFrame
-#     periods = forecast_data['properties']['periods']
-
-#     wind_data = []
-#     for period in periods:
-#         # Parse datetime with timezone awareness, then convert to Pacific
-#         dt = pd.to_datetime(period['startTime'], utc=True).tz_convert(pacific).tz_localize(None)
-
-#         wind_data.append({
-#             'datetime': dt,
-#             'wind_speed': float(period['windSpeed'].split()[0]),
-#             'wind_direction': period['windDirection'],
-#             'temperature': period['temperature']
-#         })
-
-#     df = pd.DataFrame(wind_data).set_index("datetime").sort_index()
-#     return df
 
 def fetch_wind_forecast(lat: float, lon: float):
     """

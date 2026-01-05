@@ -12,6 +12,8 @@ data_sources:
   # Note: WW3 longitudes are 0–360, so -122.7 ≈ 237.3 deg
   ww3_lat: 37.5             # WW3 grid latitude
   ww3_lon: 237.0            # WW3 grid longitude (0–360 longitude format)
+  max_partitions: 3         # maximum number of unique swells to partition from WW3
+  ww3_url: "https://thredds.ucar.edu/thredds/dodsC/grib/NCEP/WW3/Global/Best/latest" # URL for fetching the ww3 forecast
 
   # NOAA tide station ID (9414290 = SF Golden Gate)
   # Alternatives:
@@ -45,7 +47,7 @@ surf_model:
     west_bonus: 0.6                  # maximum additional wrap when period+size large
 
     # ---- NW (rare wrap events) ----
-    nw_range: [280, 315]             # NW to NNW — heavily blocked normally
+    nw_range: [280, 300]             # NW to NNW — heavily blocked normally
     nw_period_mid: 14                # tanh center period for rare wrap
     nw_period_scale: 2               # how soft the period transition is (big = softer)
     nw_height_mid: 6                 # tanh center size for rare wrap
@@ -56,7 +58,6 @@ surf_model:
 
     # ---- BLOCKED ----
     blocked_value: 0.05              # anything outside above ranges = mostly blocked
-
 
 
   # === Nearshore shoaling and energy decay ===
@@ -85,8 +86,14 @@ surf_model:
   tide:
     optimal_low: -1.0         # ideal tide window lower bound (ft MLLW)
     optimal_high: 3.0         # ideal tide window upper bound
-    max_buffer: 1.0           # max expansion of tide window with large swell
-    energy_scale: 8.0         # larger waves relax tide sensitivity
+    edge_score: 8.5           # the tide score at the optimal_high and optimal_low edges
+    outside_decay: 1.0        # the speed of tide quality dropoff outside the optimal window
+
+  # === Wind categorization ===
+  wind:
+    offshore_threshold_deg: 45.0   # max angle from offshore to be considered offshore
+    onshore_threshold_deg: 135.0   # min angle from offshore to be considered onshore
+
 
 
   # === Final score weightings ===

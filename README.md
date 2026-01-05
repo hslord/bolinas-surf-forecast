@@ -54,7 +54,7 @@ Modify this file to customize the pipeline or adapt to another break.
 ### Run the Forecast Locally
 
 ```bash
-python src/run_surf_app_local.py
+python src/run_surf_app.py
 ```
 
 ### Launch the Streamlit UI to Visualize Outputs

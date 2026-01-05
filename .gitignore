@@ -236,3 +236,6 @@ venv/
 # IDE files
 .vscode/
 .idea/
+
+# Project specific data
+data/forecast_df.parquet

@@ -1,6 +1,16 @@
 # IMPORTS
 import xarray as xr
 import pandas as pd
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+pacific = ZoneInfo("America/Los_Angeles")
+
+
+def status(msg: str):
+    """Timestamped print for logs."""
+    now = datetime.now(pacific).strftime("%H:%M:%S")
+    print(f"[{now}] 🌊 {msg}")
 
 def fetch_ww3_timeseries_latlon(lat, lon, start_deg=0.3, step=0.05, max_deg=2.0):
     """

@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 import yaml
+from reference_functions import status
 
 pacific = ZoneInfo("America/Los_Angeles")
 
@@ -21,6 +22,17 @@ def classify_wind_relative_to_coast(
 
     wind_direction is meteorological (direction FROM which wind blows).
     coast_orientation_deg is the direction the coast faces (toward ocean).
+
+    Parameters
+    ----------
+    wind_direction: int
+    coast_orientation_deg: float
+    offshore_threshold: float
+    onshore_threshold: float
+
+    Returns
+    -------
+    string value of 'offshore', 'onshore', 'crosshore'
     """
     if pd.isna(wind_direction):
         return np.nan
@@ -136,7 +148,7 @@ def expand_wind_to_hourly(df_wind: pd.DataFrame):
     hourly = (
         df_wind
         .reindex(full_index)
-        .ffill()
+        .ffill(limit=4) # Only fill gaps up to x hours
     )
 
     hourly.index.name = "time"
@@ -377,7 +389,7 @@ def calculate_surf_score(
 
 
     # 2. WIND SCORE
-    if pd.isna(wind_speed):
+    if pd.isna(wind_speed) or pd.isna(wind_direction):
         wind_score = 5
     else:
         # Convert meteorological wind (FROM) → direction wind is blowing TOWARD
@@ -530,9 +542,7 @@ def aggregate_hourly_partitions(group: pd.DataFrame):
             "n_partitions": 0,
         })
 
-    # -------------------------------------------------
     # Energy-weighted surf score
-    # -------------------------------------------------
     surf_score = float(
         np.round(
             np.average(group["partition_surf_score"], weights=energy),
@@ -540,11 +550,9 @@ def aggregate_hourly_partitions(group: pd.DataFrame):
         )
     )
 
-    # -------------------------------------------------
     # Rank partitions by Bolinas surf relevance
     # Primary: nearshore swell score
     # Secondary: offshore energy (tie-breaker)
-    # -------------------------------------------------
     group["partition_swell_score"] = group["partition_swell_score"].fillna(0.0)
     ranked = group.sort_values(
         by=["partition_swell_score", "partition_energy"],
@@ -561,9 +569,7 @@ def aggregate_hourly_partitions(group: pd.DataFrame):
         secondary_energy_frac = 0.0
 
     return pd.Series({
-        # -------------------------------------------------
         # Aggregated outcomes
-        # -------------------------------------------------
         "surf_score": surf_score,
         "bolinas_surf_min_ft": float(_scalar(group["bolinas_surf_min_ft"].max())),
         "bolinas_surf_max_ft": float(_scalar(group["bolinas_surf_max_ft"].max())),
@@ -574,9 +580,7 @@ def aggregate_hourly_partitions(group: pd.DataFrame):
         "wind_direction": _scalar(group["wind_direction"].max()),
         "tide_height": float(_scalar(group["tide_height"].max())),
 
-        # -------------------------------------------------
         # Dominant swell
-        # -------------------------------------------------
         "dominant_Hs_ft": float(_scalar(dom["Hs_ft"])),
         "dominant_Tp_s": float(_scalar(dom["Tp_s"])),
         "dominant_Dir_deg": float(_scalar(dom["Dir_deg"])),
@@ -585,9 +589,7 @@ def aggregate_hourly_partitions(group: pd.DataFrame):
         "dominant_swell_score": float(_scalar(dom["partition_swell_score"])),
         "dominant_swell_propagation": float(_scalar(dom["swell_propagation"])),
 
-        # -------------------------------------------------
         # Secondary swell
-        # -------------------------------------------------
         "secondary_Hs_ft": float(_scalar(sec["Hs_ft"])) if sec is not None else np.nan,
         "secondary_Tp_s": float(_scalar(sec["Tp_s"])) if sec is not None else np.nan,
         "secondary_Dir_deg": float(_scalar(sec["Dir_deg"])) if sec is not None else np.nan,
@@ -597,9 +599,7 @@ def aggregate_hourly_partitions(group: pd.DataFrame):
         "secondary_swell_score": float(_scalar(sec["partition_swell_score"])) if sec is not None else 0.0,
         "secondary_swell_propagation": float(_scalar(sec["swell_propagation"])) if sec is not None else 0.0,
 
-        # -------------------------------------------------
         # Meta
-        # -------------------------------------------------
         "n_partitions": int(len(group)),
     })
 
@@ -618,7 +618,7 @@ def process_data_wrapper(
             One row per hour with aggregated surf metrics and
             dominant partition diagnostics.
     """
-    print("processing data")
+    status("Starting Surf Model processing pipeline...")
 
     surf_cfg = config["surf_model"]
     data_src = config["data_sources"]
@@ -626,16 +626,13 @@ def process_data_wrapper(
     coast_orientation = data_src["coast_orientation"]
     forecast_hours = data_src["forecast_hours"]
 
-    # --------------------------------------------------
     # 1) Prepare WW3: hourly + partitioned + units
-    # --------------------------------------------------
     df_ww3 = expand_ww3_for_surf_model(fetch_data_output["ww3"])
+    status(f"WW3 data expanded to hourly. Current shape: {df_ww3.shape}")
     # expected columns:
     # time, swell_idx, Hs_ft, Tp_s, Dir_deg
 
-    # --------------------------------------------------
     # 2) Join environmental inputs onto partition rows
-    # --------------------------------------------------
     df_ww3 = df_ww3.join(
         fetch_data_output["tide"][["tide_height"]],
         on="time",
@@ -650,11 +647,10 @@ def process_data_wrapper(
         how="left"
     )
 
-    df_ww3 = df_ww3.ffill()
+    df_ww3 = df_ww3.ffill(limit=3) #only fill gaps up to 3 hours
 
-    # --------------------------------------------------
     # 3) Partition-level surf physics
-    # --------------------------------------------------
+    status("Computing Bolinas-specific wave propagation and surf heights...")
     surf_heights = df_ww3.apply(
         lambda row: predict_bolinas_surf_height(
             row["Hs_ft"],
@@ -673,9 +669,8 @@ def process_data_wrapper(
 
     df_ww3 = pd.concat([df_ww3, surf_heights_df], axis=1)
 
-    # --------------------------------------------------
     # 4) Partition-level surf score
-    # --------------------------------------------------
+    status("Calculating surf quality scores based on wind and tide alignment...")
     score_outputs = df_ww3.apply(
         lambda row: calculate_surf_score(
             row["Tp_s"],
@@ -699,9 +694,7 @@ def process_data_wrapper(
         "partition_tide_score",
     ]] = pd.DataFrame(score_outputs.tolist(), index=df_ww3.index)
 
-    # --------------------------------------------------
     # 5) Partition energy (for weighting)
-    # --------------------------------------------------
     df_ww3["partition_energy"] = df_ww3.apply(
         lambda r: compute_partition_energy(
             r["bolinas_surf_min_ft"],
@@ -712,9 +705,8 @@ def process_data_wrapper(
         axis=1
     )
 
-    # --------------------------------------------------
     # 6) Aggregate to one row per hour
-    # --------------------------------------------------
+    status("Aggregating swell partitions into final hourly forecast...")
     forecast_df = (
         df_ww3
         .groupby("time")
@@ -722,9 +714,7 @@ def process_data_wrapper(
         .sort_index()
     )
 
-    # --------------------------------------------------
     # 7) Daylight logic (hourly, post-aggregation)
-    # --------------------------------------------------
     forecast_df["date"] = forecast_df.index.date
 
     forecast_df = forecast_df.join(
@@ -740,10 +730,7 @@ def process_data_wrapper(
 
     forecast_df = forecast_df.drop(columns=["date"])
 
-    # --------------------------------------------------
     # 8) Wind Classification (post-aggregation)
-    # --------------------------------------------------
-
     forecast_df["wind_category"] = forecast_df["wind_direction"].apply(
         lambda wd: classify_wind_relative_to_coast(
             wind_direction=wd,
@@ -753,11 +740,7 @@ def process_data_wrapper(
         ))
 
 
-    # --------------------------------------------------
     # 9) Final display
-    # --------------------------------------------------
-
-    # Final fields (display order)
     forecast_df = forecast_df[[
         "surf_score",
         "bolinas_surf_min_ft",
@@ -807,5 +790,6 @@ def process_data_wrapper(
         "dominant_swell_propagation": "Dominant Propagation Score (0-1)",
         "secondary_swell_propagation": "Secondary Propagation Score (0-1)",
     })
+    status(f"Processing complete. Final forecast rows: {len(forecast_df)}")
 
     return forecast_df

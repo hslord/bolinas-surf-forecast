@@ -13,13 +13,13 @@ st.title("🌊 Bolinas Surf Forecast")
 @st.cache_data(show_spinner=True)
 def load_forecast():
     base_dir = Path(__file__).resolve().parents[1]  # repo root
-    pkl_path = base_dir / "data" / "forecast_df.pkl"
+    parquet_path = base_dir / "data" / "forecast_df.parquet"
 
-    if not pkl_path.exists():
-        st.error(f"PKL file not found at: {pkl_path}")
+    if not parquet_path.exists():
+        st.error(f"Parquet file not found at: {parquet_path}")
         st.stop()
 
-    return pd.read_pickle(pkl_path)
+    return pd.read_parquet(parquet_path)
 
 forecast_df = load_forecast()
 # Ensure datetime index (important for .pkl loads)
@@ -101,8 +101,10 @@ forecast_df["Secondary"] = (
 )
 
 forecast_df["Wind"] = (
-    forecast_df["Wind Speed (MPH)"].round(0).astype(int).astype(str) + "g" +
-    forecast_df["Wind Gust (MPH)"].round(0).astype(int).astype(str) + " " +
+    # forecast_df["Wind Speed (MPH)"].round(0).astype(int).astype(str) + "g" +
+    forecast_df["Wind Speed (MPH)"].fillna(0).round(0).astype(int).astype(str) + "g" + 
+    # forecast_df["Wind Gust (MPH)"].round(0).astype(int).astype(str) + " " +
+    forecast_df["Wind Gust (MPH)"].fillna(0).round(0).astype(int).astype(str) + " " + 
     forecast_df["Wind Direction"].astype(str)
 )
 

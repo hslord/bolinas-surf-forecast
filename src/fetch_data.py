@@ -6,9 +6,12 @@ from zoneinfo import ZoneInfo
 import xarray as xr
 import pandas as pd
 import numpy as np
+import time
 from typing import Dict, Any, List
+from reference_functions import status
 
 pacific = ZoneInfo("America/Los_Angeles")
+
 
 def detect_var(
     ds: xr.Dataset,
@@ -54,15 +57,12 @@ def fetch_ww3_timeseries(
         - columns: swell_idx, Hs_m, Tp_s, Dir_deg
         - one row per (time, swell_idx)
     """
+    status(f"Opening WW3 Dataset at {url[:50]}...")
 
-    # -------------------------------------------------
     # 1) Open dataset
-    # -------------------------------------------------
     ds = xr.open_dataset(url, engine="netcdf4")
 
-    # -------------------------------------------------
     # 2) Detect coordinate names
-    # -------------------------------------------------
     latname = next(c for c in ds.coords if "lat" in c.lower())
     lonname = next(c for c in ds.coords if "lon" in c.lower())
 
@@ -77,9 +77,7 @@ def fetch_ww3_timeseries(
     if float(lon_coord.max()) <= 180.0 and lon_val > 180.0:
         lon_val -= 360.0
 
-    # -------------------------------------------------
     # 3) Partitioned swell variables
-    # -------------------------------------------------
     var_hs = "Significant_height_of_swell_waves_ordered_sequence_of_data"
     var_tp = "Mean_period_of_swell_waves_ordered_sequence_of_data"
     var_dir = "Direction_of_swell_waves_ordered_sequence_of_data"
@@ -92,9 +90,7 @@ def fetch_ww3_timeseries(
         d for d in ds[var_hs].dims if "sequence" in d.lower()
     )
 
-    # -------------------------------------------------
     # 4) Forecast time window (UTC, tz-naive)
-    # -------------------------------------------------
     start_pacific = datetime.now(pacific).replace(
         minute=0, second=0, microsecond=0
     )
@@ -111,9 +107,7 @@ def fetch_ww3_timeseries(
         .tz_localize(None)
     )
 
-    # -------------------------------------------------
     # 5) Lazy subset (forecast-valid time ONLY)
-    # -------------------------------------------------
     sub = xr.Dataset(
         {
             "Hs_m": ds[var_hs],
@@ -134,9 +128,7 @@ def fetch_ww3_timeseries(
     # Partition limit
     sub = sub.isel({part_dim: slice(0, int(max_partitions))})
 
-    # -------------------------------------------------
     # 6) Align any variables that use time1 → time
-    # -------------------------------------------------
     tvals = sub["time"].values
 
     for var in ["Hs_m", "Tp_s", "Dir_deg"]:
@@ -160,14 +152,10 @@ def fetch_ww3_timeseries(
                 f"{v} is not aligned to forecast-valid time; dims={sub[v].dims}"
             )
 
-    # -------------------------------------------------
     # 7) Load aligned dataset
-    # -------------------------------------------------
     sub = sub.load()
 
-    # -------------------------------------------------
     # 8) Convert to long-form pandas
-    # -------------------------------------------------
     sub = sub.reset_coords(drop=True)
     stacked = sub.stack(_row=("time", part_dim))
 
@@ -197,8 +185,7 @@ def fetch_ww3_timeseries(
     df["Tp_s"] = df["Tp_s"].astype(float, errors="ignore")
     df["Dir_deg"] = df["Dir_deg"].astype(float, errors="ignore")
 
-    #temp download
-    df.to_csv('ww3_partitions.csv')
+    status(f"WW3 subset loaded: {len(df)} swell partitions found.")
 
     return df
 
@@ -223,7 +210,7 @@ def fetch_tide_predictions(
         Tide forecast indexed by localized datetime (Pacific), containing:
         - tide_height : float  Tide height in feet (MLLW)
     """
-    print('fetching tide data')
+    status(f"Fetching tides for station {station_id}...")
     station = Station(id=station_id)
 
     # Use Pacific time for begin/end dates
@@ -251,34 +238,61 @@ def fetch_tide_predictions(
         # If it somehow has timezone info, convert to Pacific
         df.index = df.index.tz_convert(pacific).tz_localize(None)
 
+    status(f"Retrieved {len(df)} tide data points.")
+
     return df
 
 
 def fetch_wind_forecast(lat: float, lon: float):
     """
     Fetch NWS wind forecast (hourly) with sustained wind and gusts.
+
+    Parameters
+    ----------
+    lat : float
+        location latitude
+    lon : float
+        location longitude
+
+    Returns
+    -------
+    pandas.DataFrame
+        Wind forecast with sustained and gust forecasts in MPH
     """
+    # status(f"Fetching wind data at {lat}, {lon}...")
 
-    headers = {
-        "User-Agent": "BolinasSurfForecast/1.0 (surfforecast@example.com)"
-    }
+    # headers = {
+    #     "User-Agent": "BolinasSurfForecast/1.0 (surfforecast@example.com)"
+    # }
 
-    # -------------------------------------------------
+    # # 1) Resolve gridpoint
+    # point_url = f"https://api.weather.gov/points/{lat},{lon}"
+    # point_data = requests.get(point_url, headers=headers, timeout=30).json()
+
+    # props = point_data["properties"]
+    # grid_id = props["gridId"]
+    # grid_x = props["gridX"]
+    # grid_y = props["gridY"]
+
+    # # 2) Fetch gridpoint forecast data
+    # grid_url = f"https://api.weather.gov/gridpoints/{grid_id}/{grid_x},{grid_y}"
+    # grid_data = requests.get(grid_url, headers=headers, timeout=30).json()
+    status(f"Fetching wind data at {lat}, {lon}...")
+    headers = {"User-Agent": "BolinasSurfForecast/1.0 (your-email@example.com)"}
+
     # 1) Resolve gridpoint
-    # -------------------------------------------------
     point_url = f"https://api.weather.gov/points/{lat},{lon}"
-    point_data = requests.get(point_url, headers=headers, timeout=30).json()
+    resp = requests.get(point_url, headers=headers, timeout=30)
+    resp.raise_for_status() # Trigger safe_fetch error if NWS is down
+    point_data = resp.json()
 
     props = point_data["properties"]
-    grid_id = props["gridId"]
-    grid_x = props["gridX"]
-    grid_y = props["gridY"]
-
-    # -------------------------------------------------
-    # 2) Fetch gridpoint forecast data
-    # -------------------------------------------------
-    grid_url = f"https://api.weather.gov/gridpoints/{grid_id}/{grid_x},{grid_y}"
-    grid_data = requests.get(grid_url, headers=headers, timeout=30).json()
+    grid_url = props["forecastGridData"] # Using the direct link is more reliable
+    
+    # 2) Fetch gridpoint data
+    grid_resp = requests.get(grid_url, headers=headers, timeout=30)
+    grid_resp.raise_for_status()
+    grid_data = grid_resp.json()
 
     wind_speed_ts = grid_data["properties"]["windSpeed"]["values"]
     wind_gust_ts = grid_data["properties"]["windGust"]["values"]
@@ -305,6 +319,8 @@ def fetch_wind_forecast(lat: float, lon: float):
         .set_index("datetime")
         .sort_index()
     )
+
+    status(f"Retrieved {len(df)} wind data points.")
 
     return df
 
@@ -334,7 +350,8 @@ def fetch_sunrise_sunset(
         - first_light : datetime (Pacific)
         - last_light  : datetime (Pacific)
     """
-    print('fetching daylight data')
+    status(f"Fetching daylight for {days} days at {lat}, {lon}...")
+
     sun_data = []
     start_date = datetime.now(pacific).date()  # Use Pacific time for start date
 
@@ -358,8 +375,12 @@ def fetch_sunrise_sunset(
             'first_light': first_light,
             'last_light': last_light,
         })
+        time.sleep(0.5) # Wait half a second between requests to avoid getting blocked
 
     df = pd.DataFrame(sun_data).set_index("date").sort_index()
+
+    status(f"Retrieved {len(df)} daylight data points.")
+
     return df
 
 
@@ -383,36 +404,34 @@ def fetch_data_wrapper(data_sources: Dict):
             "wind": pd.DataFrame wind forecast
             "sun" : pd.DataFrame sunrise / sunset times
     """
+    results = {
+        "ww3": None,
+        "tide": None,
+        "wind": None,
+        "sun": None,
+    }
 
-    # 1. offshore swell (fast extractor)
-    ww3_df = fetch_ww3_timeseries(
-        data_sources["ww3_lat"],
-        data_sources["ww3_lon"],
-        data_sources["max_partitions"],
-        data_sources["forecast_hours"],
-        data_sources["ww3_url"]
-    )
+    # Helper to run a fetch function and catch errors
+    def safe_fetch(key, func, *args, **kwargs):
+        try:
+            results[key] = func(*args, **kwargs)
+            status(f"Successfully fetched {key}")
+        except Exception as e:
+            status(f"ERROR fetching {key}: {e}")
+
+    # 1. offshore swell
+    safe_fetch("ww3", fetch_ww3_timeseries, 
+               data_sources["ww3_lat"], data_sources["ww3_lon"],
+               data_sources["max_partitions"], data_sources["forecast_hours"],
+               data_sources["ww3_url"])
 
     # 2. tides
-    tide_df = fetch_tide_predictions(
-        data_sources["tide_station"]
-    )
+    safe_fetch("tide", fetch_tide_predictions, data_sources["tide_station"])
 
-    # 3. wind (NWS API)
-    wind_df = fetch_wind_forecast(
-        data_sources["location_lat"],
-        data_sources["location_lon"]
-    )
+    # 3. wind
+    safe_fetch("wind", fetch_wind_forecast, data_sources["location_lat"], data_sources["location_lon"])
 
-    # 4. sunrise/sunset (NOAA external API)
-    sun_df = fetch_sunrise_sunset(
-        data_sources["location_lat"],
-        data_sources["location_lon"]
-    )
+    # 4. sunrise/sunset
+    safe_fetch("sun", fetch_sunrise_sunset, data_sources["location_lat"], data_sources["location_lon"])
 
-    return {
-        "ww3": ww3_df,
-        "tide": tide_df,
-        "wind": wind_df,
-        "sun": sun_df,
-    }
+    return results

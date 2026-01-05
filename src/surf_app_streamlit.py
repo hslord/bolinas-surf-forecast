@@ -29,7 +29,9 @@ if not isinstance(forecast_df.index, pd.DatetimeIndex):
 
 @st.cache_data
 def load_config():
-    with open("../config/surf_config.yaml", "r") as f:
+    base_dir = Path(__file__).resolve().parents[1]  # repo root
+    config_path = base_dir / "config" / "surf_config.yaml"
+    with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
 config = load_config()

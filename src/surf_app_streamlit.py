@@ -10,9 +10,10 @@ st.title("🌊 Bolinas Surf Forecast")
 # =======================================================================================
 # DATA LOADING (pkl)
 # =======================================================================================
-@st.cache_data(show_spinner=True)
+@st.cache_data(ttl=3600, show_spinner=True) # Added TTL (1 hour) to force refreshes
 def load_forecast():
-    base_dir = Path(__file__).resolve().parents[1]  # repo root
+    # repo root logic is good
+    base_dir = Path(__file__).resolve().parents[1]
     parquet_path = base_dir / "data" / "forecast_df.parquet"
 
     if not parquet_path.exists():
@@ -89,15 +90,15 @@ forecast_df["Surf (ft)"] = (
 )
 
 forecast_df["Dominant"] = (
-    forecast_df["Dominant Swell Size (ft)"].round(1).astype(str) + "ft @ " +
-    forecast_df["Dominant Swell Period"].round(0).astype(int).astype(str) + "s " +
-    forecast_df["Dominant Swell Direction"].apply(categorize_bolinas_swell)
+    forecast_df["Dominant Swell Size (ft)"].round(1).fillna(0).astype(str) + "ft @ " +
+    forecast_df["Dominant Swell Period"].fillna(0).round(0).astype(int).astype(str) + "s " +
+    forecast_df["Dominant Swell Direction"].fillna(0).apply(categorize_bolinas_swell)
 )
 
 forecast_df["Secondary"] = (
-    forecast_df["Secondary Swell Size (ft)"].round(1).astype(str) + "ft @ " +
-    forecast_df["Secondary Swell Period"].round(0).astype(int).astype(str) + "s " +
-    forecast_df["Secondary Swell Direction"].apply(categorize_bolinas_swell)
+    forecast_df["Secondary Swell Size (ft)"].round(1).fillna(0).astype(str) + "ft @ " +
+    forecast_df["Secondary Swell Period"].fillna(0).round(0).astype(int).astype(str) + "s " +
+    forecast_df["Secondary Swell Direction"].fillna(0).apply(categorize_bolinas_swell)
 )
 
 forecast_df["Wind"] = (

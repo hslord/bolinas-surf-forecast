@@ -85,7 +85,7 @@ bolinas-surf-forecast/
 │   └── __init__.py
 │
 ├── requirements-pipeline.txt
-├── requirements-streamlit.txt
+├── requirements.txt
 ├── .gitignore
 ├── LICENSE
 └── README.md

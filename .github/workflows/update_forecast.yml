@@ -27,7 +27,7 @@ jobs:
           pip install -r requirements-pipeline.txt
 
       - name: Run surf forecast pipeline
-        run: python src/run_surf_app_local.py
+        run: python src/run_surf_app.py
 
       - name: Commit and push changes
         run: |

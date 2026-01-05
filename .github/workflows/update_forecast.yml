@@ -1,0 +1,38 @@
+name: Update Bolinas Surf Forecast
+
+on:
+  schedule:
+    # This runs at 4am and 4pm Pacific Time (approx)
+    - cron: '0 0,12 * * *'
+  workflow_dispatch: # This adds a "Run" button to test it manually
+
+jobs:
+  build_and_run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-pipeline.txt
+
+      - name: Run surf forecast pipeline
+        run: python src/run_surf_app_local.py
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add data/forecast_df.parquet
+          git commit -m "Automated update: New surf forecast" || echo "No changes to commit"
+          git push

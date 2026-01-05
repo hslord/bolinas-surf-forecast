@@ -3,7 +3,6 @@ import pandas as pd
 import altair as alt
 from pathlib import Path
 import yaml
-import matplotlib.pyplot as plt
 import numpy as np
 
 st.title("🌊 Bolinas Surf Forecast")

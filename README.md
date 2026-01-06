@@ -1,71 +1,52 @@
-# Bolinas Surf Forecast
+# 🌊 Bolinas Surf Forecast
 
-A fully local, configurable surf-forecasting pipeline for Bolinas, CA. Fetches real environmental data (WW3, NOAA tides, NWS winds, sunrise/sunset), calibrates offshore swell to local break behavior, computes surf scores, and displays everything in an interactive Streamlit UI.
+A fully automated, physics-aware surf forecasting pipeline for **Bolinas, CA**. This tool fetches deep-water wave data and NWS weather forecasts, applies a custom propagation model to account for local bathymetry, and updates a live dashboard every 12 hours.
 
-## Features
+## 🚀 Live Forecast
+**View the interactive dashboard here: [Live App Link](https://bolinas-surf-forecast-helenlord.streamlit.app/)**
 
-- Deep-water WW3 swell forecast ingestion
-- NWS wind forecasts
-- Sunrise, sunset, civil twilight
-- NOAA tide predictions (MLLW)
-- Surf-score model for Bolinas
-- Interactive UI via Streamlit
-- Configurable through YAML
+---
 
-## Installation
+## 🛠 How It Works
+Bolinas is a unique "wrap" break. Deep-water swells from the West and Northwest must refract around Duxbury Reef to reach the Patch and the Channel. 
 
+This pipeline:
+1. **Fetches** raw WW3 (Wave Watch III) data and NWS wind grids.
+2. **Filters** swells based on "Sweet Spot" angles (S/SW) vs "Wrap" angles (W/NW).
+3. **Calculates** a custom **Surf Score (1-10)** by weighting tide height, wind velocity/direction, and swell period.
+4. **Automates** the entire process via GitHub Actions—no manual local runs required.
+
+
+
+---
+
+## ✨ Features
+- **Local Calibration:** Configurable "shadowing" and "wrap" coefficients in `surf_config.yaml`.
+- **Tide Integration:** Real-time NOAA MLLW tide predictions.
+- **Daylight Awareness:** Specifically highlights "Best Session" windows during daylight hours.
+- **Wind Alignment:** Calibrated for Bolinas' specific coastal orientation to identify true offshore flow.
+
+---
+
+## 📦 Installation & Local Setup
+
+If you want to run the model locally:
+
+1. **Clone the Repo:**
 ```bash
-git clone https://github.com/<your-username>/bolinas-surf-forecast.git
-cd bolinas-surf-forecast
+   git clone [https://github.com/hslord/bolinas-surf-forecast.git](https://github.com/hslord/bolinas-surf-forecast.git)
+   cd bolinas-surf-forecast
 ```
 
-Create a virtual environment:
-
+2. **Run the Forecast:**
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+   python src/run_surf_app.py
 ```
 
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-## Configuration
-
-All settings live in:
-
-```yaml
-config/surf_config.yaml
-```
-
-Includes:
-- Location latitude / longitude
-- WW3 latitude / longitude
-- NOAA tide station
-- Forecast horizon
-- Processing options
-
-Modify this file to customize the pipeline or adapt to another break.
-
-## Usage
-
-### Run the Forecast Locally
-
-```bash
-python src/run_surf_app.py
-```
-
-### Launch the Streamlit UI to Visualize Outputs
-
+3. **Launch the Streamlit UI**
 ```bash
 streamlit run src/surf_app_streamlit.py
-```
 
-Then open:
-
-```
 http://localhost:8501
 ```
 

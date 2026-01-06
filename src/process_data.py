@@ -195,8 +195,9 @@ def bolinas_wave_propagation(
     south_edge_min, south_edge_max = propagation_cfg["south_edges"]
     if (south_edge_min <= direction_deg < south_sweet_min) or \
        (south_sweet_max < direction_deg <= south_edge_max):
-        # Simple reduced contribution for near-south angles
-        return 0.7
+        
+        edge_boost = np.clip((period_sec - 8) / 10, 0, 0.25) 
+        return 0.7 + edge_boost
 
     # WEST WRAP (logistic)
     west_min, west_max = propagation_cfg["west_range"]

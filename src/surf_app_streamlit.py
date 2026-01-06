@@ -309,8 +309,8 @@ st.subheader("🔎 Surf Quality Breakdown")
 timestamps = forecast_df["datetime"].tolist()
 
 # Safe default: highest surf score timestamp
-best_timestamp = forecast_df.loc[
-    forecast_df["Surf Score (1-10)"].idxmax(),
+best_timestamp = daylight_df.loc[
+    daylight_df["Surf Score (1-10)"].idxmax(),
     "datetime"
 ]
 
@@ -346,7 +346,7 @@ with st.container(border=True):
                 st.write(f"**{detail_text}**")
 
     # Column 1: Overall
-    breakdown_item(col1, row['Surf Score (1-10)'], "Overall Grade", row['Surf (ft)'])
+    breakdown_item(col1, row['Surf Score (1-10)'], "Overall Grade", f"{row['Surf (ft)']} ft")
 
     # Column 2: Swell (using is_multi for the secondary swell styling)
     swell_html = f"**Dom:** {row['Dominant']}<br><span style='font-size:0.8rem; color:grey;'>**Sec:** {row['Secondary']}</span>"

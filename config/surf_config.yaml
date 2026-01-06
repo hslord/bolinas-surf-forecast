@@ -39,11 +39,11 @@ surf_model:
 
     # ---- WEST (classic wrap) ----
     west_range: [240, 280]           # W to WNW, classic wrapping range
-    west_period_mid: 13              # logistic center period where wrapping starts
+    west_period_mid: 11             # logistic center period where wrapping starts
     west_period_k: 1.0               # steepness of period transition (higher = sharper)
-    west_height_mid: 3               # logistic center height for west wrap
+    west_height_mid: 2               # logistic center height for west wrap
     west_height_k: 1.0               # steepness of size contribution
-    west_base: 0.2                   # minimum west contribution (small wrap)
+    west_base: 0.35                   # minimum west contribution (small wrap)
     west_bonus: 0.6                  # maximum additional wrap when period+size large
 
     # ---- NW (rare wrap events) ----
@@ -62,23 +62,23 @@ surf_model:
 
   # === Nearshore shoaling and energy decay ===
   nearshore:
-    base_factor: 0.50         # typical offshore→nearshore shoaling
+    base_factor: 0.65         # typical offshore→nearshore shoaling
     min_direction_factor: 0.1 # strong suppression in bad directions
     range_factor: 0.15        # ±15% spread for min/max surf range
 
 
   # === Wave energy weight ===
   energy:
-    height_exp: 1.1           # height exponent – bigger waves grow faster than linear
+    height_exp: 1.2           # height exponent – bigger waves grow faster than linear
     period_exp: 0.3           # period exponent – long period increases power
-    swell_saturation: 0.1    # governs how quickly swell score approaches 10
+    swell_saturation: 0.35    # governs how quickly swell score approaches 10
 
 
   # === Period multiplier (groundswell vs windswell) ===
   period_multiplier:
     min: 0.3                  # minimum multiplier (short-period wind swell)
     max: 1.2                  # maximum multiplier (long-period groundswell)
-    midpoint: 13              # period at midpoint of logistic curve
+    midpoint: 10              # period at midpoint of logistic curve
     steepness: 0.8            # how quickly multiplier transitions around midpoint
 
 
@@ -98,7 +98,7 @@ surf_model:
 
   # === Final score weightings ===
   weights:
-    swell: 0.45                # weight of swell score in final result
-    wind: 0.25                 # weight of wind score
+    swell: 0.5                # weight of swell score in final result
+    wind: 0.2                 # weight of wind score
     tide: 0.2                 # weight of tide score
-    baseline: 2.0             # baseline surf value (small clean surf)
+    baseline: 10.0             # baseline surf value (small clean surf)

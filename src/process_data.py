@@ -216,18 +216,22 @@ def bolinas_wave_propagation(
             + propagation_cfg["west_bonus"] * wrap * size
         )
 
-    # NW RARE WRAP (tanh) 
+    # NW WRAP (logistic)
     nw_min, nw_max = propagation_cfg["nw_range"]
     if nw_min <= direction_deg <= nw_max:
-        rare = (
-            propagation_cfg["nw_base"]
-            + propagation_cfg["nw_bonus"]
-              * np.tanh((period_sec - propagation_cfg["nw_period_mid"])
-                        / propagation_cfg["nw_period_scale"])
-              * np.tanh((height_ft - propagation_cfg["nw_height_mid"])
-                        / propagation_cfg["nw_height_scale"])
+        wrap = 1.0 / (
+            1.0 + np.exp(-(period_sec - propagation_cfg["nw_period_mid"])
+                         * propagation_cfg["nw_period_k"])
         )
-        return max(propagation_cfg["nw_floor"], rare)
+        size = 1.0 / (
+            1.0 + np.exp(-(height_ft - propagation_cfg["nw_height_mid"])
+                         * propagation_cfg["nw_height_k"])
+        )
+        # baseline + conditional bonus
+        return (
+            propagation_cfg["nw_base"]
+            + propagation_cfg["nw_bonus"] * wrap * size
+        )
 
     # BLOCKED
     return propagation_cfg["blocked_value"]
@@ -371,9 +375,6 @@ def calculate_surf_score(
             (1 + np.exp(-pm["steepness"] * (period_s - pm["midpoint"])))
         )
 
-        # Period only matters if swell actually wraps
-        period_mult *= swell_propagation ** 0.75
-
         # Nearshore height proxy
         nearshore_h = 0.5 * (bolinas_surf_min_ft + bolinas_surf_max_ft)
 
@@ -382,12 +383,11 @@ def calculate_surf_score(
         energy = nearshore_h ** eg["height_exp"]
 
         # Propagation as gate
-        swell_raw = energy * period_mult * swell_propagation
+        swell_raw = energy * period_mult 
 
         swell_score = 10 * (
             1 - np.exp(-0.7 * eg["swell_saturation"] * swell_raw)
         )
-
 
     # 2. WIND SCORE
     if pd.isna(wind_speed) or pd.isna(wind_direction):
@@ -449,14 +449,21 @@ def calculate_surf_score(
 
         tide_score = float(np.clip(tide_score, 0.0, 10.0))
 
-    # Tide influence scales with swell quality for final surf scoring
-    tide_weight_factor = np.clip(swell_score / 10.0, 0.0, 1.0)
-
     # 4. FINAL SCORE
+
+    # Dampen the tide's influence on small/poor swells while ensuring 
+    # it maintains a 50% minimum impact for tide-sensitive breaks.
+    tide_weight_factor = np.clip((swell_score + 5.0) / 10.0, 0.5, 1.0)
+
+    # Wind only contributes to the score if there is actual swell energy.
+    # If swell_score is 0 (flat), wind adds 0 points to the total.
+    wind_weight_factor = np.clip(swell_score / 3.0, 0.0, 1.0)
+
+    # Put all components together 
     w = surf_model["weights"]
     final_score = (
         swell_score * w["swell"] +
-        wind_score * w["wind"] +
+        wind_score * w["wind"] * wind_weight_factor + 
         tide_score * w["tide"] * tide_weight_factor +
         w["baseline"] * 0.1
     )
@@ -551,14 +558,12 @@ def aggregate_hourly_partitions(group: pd.DataFrame):
         )
     )
 
-    # Rank partitions by Bolinas surf relevance
-    # Primary: nearshore swell score
-    # Secondary: offshore energy (tie-breaker)
+    # Rank partitions by Bolinas surf relevance using height and swell score
     group["partition_swell_score"] = group["partition_swell_score"].fillna(0.0)
     ranked = group.sort_values(
-        by=["partition_swell_score", "partition_energy"],
+        by=["bolinas_surf_max_ft", "partition_swell_score"],
         ascending=[False, False],
-    )
+        )
 
     dom = ranked.iloc[0]
 

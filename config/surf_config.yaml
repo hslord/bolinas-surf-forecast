@@ -45,16 +45,16 @@ surf_model:
     west_height_k: 1.0               # steepness of size contribution
     west_base: 0.35                   # minimum west contribution (small wrap)
     west_bonus: 0.6                  # maximum additional wrap when period+size large
-
+    
     # ---- NW (rare wrap events) ----
     nw_range: [280, 300]             # NW to NNW — heavily blocked normally
-    nw_period_mid: 14                # tanh center period for rare wrap
-    nw_period_scale: 2               # how soft the period transition is (big = softer)
-    nw_height_mid: 6                 # tanh center size for rare wrap
-    nw_height_scale: 2               # same idea – higher = smoother ramp
-    nw_base: 0.1                     # minimum NW contribution
-    nw_bonus: 0.4                    # how much "rare wrap" benefit can be added
-    nw_floor: 0.05                   # hard minimum so zeros never break logic
+    nw_period_mid: 11.0              # Logistic center: is the "unlock" point for Bolinas wrap
+    nw_period_k: 0.7                 # Replaces scale: steep enough to favor long periods 
+    nw_height_mid: 5.0               # Logistic center: offshore size needed for meaningful wrap
+    nw_height_k: 0.5                 # Replaces scale: smooth climb as the ocean gets bigger
+    nw_base: 0.05                    # Dropped to 0.05: NW is weaker than West by default
+    nw_bonus: 0.45                   # Max possible wrap becomes 0.50 (base + bonus)
+    nw_floor: 0.05                   # Minimum fallback
 
     # ---- BLOCKED ----
     blocked_value: 0.05              # anything outside above ranges = mostly blocked
@@ -62,7 +62,7 @@ surf_model:
 
   # === Nearshore shoaling and energy decay ===
   nearshore:
-    base_factor: 0.65         # typical offshore→nearshore shoaling
+    base_factor: 0.85         # typical offshore→nearshore shoaling
     min_direction_factor: 0.1 # strong suppression in bad directions
     range_factor: 0.15        # ±15% spread for min/max surf range
 

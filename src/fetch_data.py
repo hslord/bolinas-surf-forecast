@@ -241,11 +241,12 @@ def fetch_tide_predictions(
     status(f"Retrieved {len(df)} tide data points.")
 
     return df
-
+    
 
 def fetch_wind_forecast(lat: float, lon: float):
     """
-    Fetch NWS wind forecast (hourly) with sustained wind and gusts.
+    Fetch wind forecast from Open-Meteo (hourly) with sustained wind and gusts.
+    Uses 'best_match' to ensure a full 7-day forecast without gaps.
 
     Parameters
     ----------
@@ -259,70 +260,46 @@ def fetch_wind_forecast(lat: float, lon: float):
     pandas.DataFrame
         Wind forecast with sustained and gust forecasts in MPH
     """
-    # status(f"Fetching wind data at {lat}, {lon}...")
-
-    # headers = {
-    #     "User-Agent": "BolinasSurfForecast/1.0 (surfforecast@example.com)"
-    # }
-
-    # # 1) Resolve gridpoint
-    # point_url = f"https://api.weather.gov/points/{lat},{lon}"
-    # point_data = requests.get(point_url, headers=headers, timeout=30).json()
-
-    # props = point_data["properties"]
-    # grid_id = props["gridId"]
-    # grid_x = props["gridX"]
-    # grid_y = props["gridY"]
-
-    # # 2) Fetch gridpoint forecast data
-    # grid_url = f"https://api.weather.gov/gridpoints/{grid_id}/{grid_x},{grid_y}"
-    # grid_data = requests.get(grid_url, headers=headers, timeout=30).json()
-    status(f"Fetching wind data at {lat}, {lon}...")
-    headers = {"User-Agent": "BolinasSurfForecast/1.0 (your-email@example.com)"}
-
-    # 1) Resolve gridpoint
-    point_url = f"https://api.weather.gov/points/{lat},{lon}"
-    resp = requests.get(point_url, headers=headers, timeout=30)
-    resp.raise_for_status() # Trigger safe_fetch error if NWS is down
-    point_data = resp.json()
-
-    props = point_data["properties"]
-    grid_url = props["forecastGridData"] # Using the direct link is more reliable
+    status(f"Fetching Open-Meteo wind data at {lat}, {lon}...")
     
-    # 2) Fetch gridpoint data
-    grid_resp = requests.get(grid_url, headers=headers, timeout=30)
-    grid_resp.raise_for_status()
-    grid_data = grid_resp.json()
-
-    wind_speed_ts = grid_data["properties"]["windSpeed"]["values"]
-    wind_gust_ts = grid_data["properties"]["windGust"]["values"]
-    wind_dir_ts = grid_data["properties"]["windDirection"]["values"]
-
-    rows = []
-
-    for ws, wg, wd in zip(wind_speed_ts, wind_gust_ts, wind_dir_ts):
-        dt = (
-            pd.to_datetime(ws["validTime"].split("/")[0], utc=True)
-            .tz_convert(pacific)
-            .tz_localize(None)
-        )
-
-        rows.append({
-            "datetime": dt,
-            "wind_speed": ws["value"] * 0.621371 if ws["value"] is not None else np.nan,  # m/s → mph
-            "wind_gust": wg["value"] * 0.621371 if wg["value"] is not None else np.nan,
-            "wind_direction": wd["value"],
-        })
-
-    df = (
-        pd.DataFrame(rows)
-        .set_index("datetime")
-        .sort_index()
+    # Open-Meteo API URL - specifically requesting wind at 10m height
+    url = (
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={lat}&longitude={lon}&"
+        f"hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m&"
+        f"wind_speed_unit=mph&"
+        f"timezone=America/Los_Angeles"
     )
 
-    status(f"Retrieved {len(df)} wind data points.")
+    try: 
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
 
-    return df
+        hourly = data["hourly"]
+        
+        # Open-Meteo returns a dictionary of lists
+        df = pd.DataFrame({
+            "datetime": pd.to_datetime(hourly["time"]),
+            "wind_speed": hourly["wind_speed_10m"],
+            "wind_gust": hourly["wind_gusts_10m"],
+            "wind_direction": hourly["wind_direction_10m"]
+        })
+
+        # Clean up: Localize to Pacific, then remove TZ 
+        df["datetime"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert(pacific).dt.tz_localize(None)
+        df = df.set_index("datetime").sort_index()
+
+        # Physical sanity check: gusts must be >= speed
+        df['wind_gust'] = df[['wind_speed', 'wind_gust']].max(axis=1)
+
+        status(f"Retrieved {len(df)} wind data points from Open-Meteo.")
+
+        return df
+    except Exception as e:
+        status(f"Error fetching wind from Open-Meteo: {e}")
+        # empty df allows forecast to continue
+        return pd.DataFrame()
 
 
 def fetch_sunrise_sunset(

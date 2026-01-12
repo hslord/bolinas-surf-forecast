@@ -1,6 +1,6 @@
 # 🌊 Bolinas Surf Forecast
 
-A fully automated, physics-aware surf forecasting pipeline for **Bolinas, CA**. This tool fetches deep-water wave data and NWS weather forecasts, applies a custom propagation model to account for local bathymetry, and updates a live dashboard every 12 hours.
+A fully automated, physics-aware surf forecasting pipeline for **Bolinas, CA**. This tool fetches deep-water wave data and weather forecasts, applies a custom propagation model to account for local bathymetry, and updates a live dashboard every 12 hours.
 
 ## 🚀 Live Forecast
 **View the interactive dashboard here: [Live App Link](https://bolinas-surf-forecast-helenlord.streamlit.app/)**

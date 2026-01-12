@@ -39,19 +39,19 @@ surf_model:
 
     # ---- WEST (classic wrap) ----
     west_range: [240, 280]           # W to WNW, classic wrapping range
-    west_period_mid: 11             # logistic center period where wrapping starts
-    west_period_k: 1.0               # steepness of period transition (higher = sharper)
-    west_height_mid: 2               # logistic center height for west wrap
-    west_height_k: 1.0               # steepness of size contribution
-    west_base: 0.35                   # minimum west contribution (small wrap)
+    west_period_mid: 11.5             # logistic center period where wrapping starts
+    west_period_k: 0.8               # steepness of period transition (higher = sharper)
+    west_height_mid: 3.0               # logistic center height for west wrap
+    west_height_k: 0.8               # steepness of size contribution
+    west_base: 0.15                   # minimum west contribution (small wrap)
     west_bonus: 0.6                  # maximum additional wrap when period+size large
     
     # ---- NW (rare wrap events) ----
     nw_range: [280, 300]             # NW to NNW — heavily blocked normally
-    nw_period_mid: 11.0              # Logistic center: is the "unlock" point for Bolinas wrap
-    nw_period_k: 0.7                 # Replaces scale: steep enough to favor long periods 
+    nw_period_mid: 11.5              # Logistic center: is the "unlock" point for Bolinas wrap
+    nw_period_k: 0.8                 # steepness of period transition (higher = sharper) 
     nw_height_mid: 5.0               # Logistic center: offshore size needed for meaningful wrap
-    nw_height_k: 0.5                 # Replaces scale: smooth climb as the ocean gets bigger
+    nw_height_k: 0.5                 # steepness of size contribution
     nw_base: 0.05                    # Dropped to 0.05: NW is weaker than West by default
     nw_bonus: 0.45                   # Max possible wrap becomes 0.50 (base + bonus)
     nw_floor: 0.05                   # Minimum fallback

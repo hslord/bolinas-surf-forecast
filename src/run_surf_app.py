@@ -34,6 +34,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = BASE_DIR / "config" / "surf_config.yaml"
 DATA_DIR = BASE_DIR / "data"
 
+
 def load_forecast():
     # Check if config exists before opening
     if not CONFIG_PATH.exists():
@@ -55,6 +56,7 @@ def load_forecast():
     status("Running Surf Model Logic...")
     df = process_data_wrapper(raw, config)
     return df
+
 
 # --- Execution Block ---
 forecast_df = load_forecast()

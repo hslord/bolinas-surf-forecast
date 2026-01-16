@@ -13,10 +13,7 @@ from reference_functions import status
 pacific = ZoneInfo("America/Los_Angeles")
 
 
-def detect_var(
-    ds: xr.Dataset,
-    keywords: List[str]
-):
+def detect_var(ds: xr.Dataset, keywords: List[str]):
     """
     Find the first data variable name containing all given keywords.
 
@@ -38,6 +35,7 @@ def detect_var(
         if all(k in name for k in keywords):
             return v
     return None
+
 
 def fetch_ww3_timeseries(
     lat_valid: float,
@@ -86,26 +84,14 @@ def fetch_ww3_timeseries(
         if v not in ds.data_vars:
             raise RuntimeError(f"Missing WW3 variable: {v}")
 
-    part_dim = next(
-        d for d in ds[var_hs].dims if "sequence" in d.lower()
-    )
+    part_dim = next(d for d in ds[var_hs].dims if "sequence" in d.lower())
 
     # 4) Forecast time window (UTC, tz-naive)
-    start_pacific = datetime.now(pacific).replace(
-        minute=0, second=0, microsecond=0
-    )
+    start_pacific = datetime.now(pacific).replace(minute=0, second=0, microsecond=0)
     end_pacific = start_pacific + timedelta(hours=int(forecast_hours))
 
-    start_utc = (
-        pd.Timestamp(start_pacific)
-        .tz_convert("UTC")
-        .tz_localize(None)
-    )
-    end_utc = (
-        pd.Timestamp(end_pacific)
-        .tz_convert("UTC")
-        .tz_localize(None)
-    )
+    start_utc = pd.Timestamp(start_pacific).tz_convert("UTC").tz_localize(None)
+    end_utc = pd.Timestamp(end_pacific).tz_convert("UTC").tz_localize(None)
 
     # 5) Lazy subset (forecast-valid time ONLY)
     sub = xr.Dataset(
@@ -159,11 +145,7 @@ def fetch_ww3_timeseries(
     sub = sub.reset_coords(drop=True)
     stacked = sub.stack(_row=("time", part_dim))
 
-    df = (
-        stacked
-        .to_dataframe()[["Hs_m", "Tp_s", "Dir_deg"]]
-        .reset_index()
-    )
+    df = stacked.to_dataframe()[["Hs_m", "Tp_s", "Dir_deg"]].reset_index()
 
     df = df.rename(columns={part_dim: "swell_idx"})
 
@@ -172,9 +154,7 @@ def fetch_ww3_timeseries(
 
     # Convert time to Pacific tz-naive
     df["time"] = (
-        pd.to_datetime(df["time"], utc=True)
-        .dt.tz_convert(pacific)
-        .dt.tz_localize(None)
+        pd.to_datetime(df["time"], utc=True).dt.tz_convert(pacific).dt.tz_localize(None)
     )
 
     df = df.set_index("time").sort_index()
@@ -190,9 +170,7 @@ def fetch_ww3_timeseries(
     return df
 
 
-def fetch_tide_predictions(
-    station_id: str,
-     days: int = 14):
+def fetch_tide_predictions(station_id: str, days: int = 14):
     """
     Fetch tide predictions from NOAA CO-OPS and return hourly tide heights
     in Pacific local time (PST/PDT).
@@ -225,10 +203,10 @@ def fetch_tide_predictions(
         datum="MLLW",
         interval="h",
         units="english",
-        time_zone="lst_ldt"  # Local standard/daylight time
+        time_zone="lst_ldt",  # Local standard/daylight time
     )
 
-    df.rename(columns={'v':'tide_height'}, inplace=True)
+    df.rename(columns={"v": "tide_height"}, inplace=True)
 
     # The noaa_coops library returns timezone-naive datetimes
     if df.index.tz is None:
@@ -241,7 +219,7 @@ def fetch_tide_predictions(
     status(f"Retrieved {len(df)} tide data points.")
 
     return df
-    
+
 
 def fetch_wind_forecast(lat: float, lon: float):
     """
@@ -261,7 +239,7 @@ def fetch_wind_forecast(lat: float, lon: float):
         Wind forecast with sustained and gust forecasts in MPH
     """
     status(f"Fetching Open-Meteo wind data at {lat}, {lon}...")
-    
+
     # Open-Meteo API URL - specifically requesting wind at 10m height
     url = (
         f"https://api.open-meteo.com/v1/forecast?"
@@ -271,27 +249,34 @@ def fetch_wind_forecast(lat: float, lon: float):
         f"timezone=America/Los_Angeles"
     )
 
-    try: 
+    try:
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
         data = resp.json()
 
         hourly = data["hourly"]
-        
-        # Open-Meteo returns a dictionary of lists
-        df = pd.DataFrame({
-            "datetime": pd.to_datetime(hourly["time"]),
-            "wind_speed": hourly["wind_speed_10m"],
-            "wind_gust": hourly["wind_gusts_10m"],
-            "wind_direction": hourly["wind_direction_10m"]
-        })
 
-        # Clean up: Localize to Pacific, then remove TZ 
-        df["datetime"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert(pacific).dt.tz_localize(None)
+        # Open-Meteo returns a dictionary of lists
+        df = pd.DataFrame(
+            {
+                "datetime": pd.to_datetime(hourly["time"]),
+                "wind_speed": hourly["wind_speed_10m"],
+                "wind_gust": hourly["wind_gusts_10m"],
+                "wind_direction": hourly["wind_direction_10m"],
+            }
+        )
+
+        # Clean up: Localize to Pacific, then remove TZ
+        df["datetime"] = (
+            df["datetime"]
+            .dt.tz_localize("UTC")
+            .dt.tz_convert(pacific)
+            .dt.tz_localize(None)
+        )
         df = df.set_index("datetime").sort_index()
 
         # Physical sanity check: gusts must be >= speed
-        df['wind_gust'] = df[['wind_speed', 'wind_gust']].max(axis=1)
+        df["wind_gust"] = df[["wind_speed", "wind_gust"]].max(axis=1)
 
         status(f"Retrieved {len(df)} wind data points from Open-Meteo.")
 
@@ -302,10 +287,7 @@ def fetch_wind_forecast(lat: float, lon: float):
         return pd.DataFrame()
 
 
-def fetch_sunrise_sunset(
-    lat: float, 
-    lon: float, 
-    days: int = 14):
+def fetch_sunrise_sunset(lat: float, lon: float, days: int = 14):
     """
     Fetch sunrise and sunset times for a given location, convert timestamps
     to Pacific local time (PST/PDT), and return daily first-light and
@@ -340,19 +322,37 @@ def fetch_sunrise_sunset(
         response.raise_for_status()
         data = response.json()
 
-        sunrise = pd.to_datetime(data['results']['sunrise'], utc=True).tz_convert(pacific).tz_localize(None)
-        sunset = pd.to_datetime(data['results']['sunset'], utc=True).tz_convert(pacific).tz_localize(None)
-        first_light = pd.to_datetime(data['results']['civil_twilight_begin'], utc=True).tz_convert(pacific).tz_localize(None)
-        last_light = pd.to_datetime(data['results']['civil_twilight_end'], utc=True).tz_convert(pacific).tz_localize(None)
+        sunrise = (
+            pd.to_datetime(data["results"]["sunrise"], utc=True)
+            .tz_convert(pacific)
+            .tz_localize(None)
+        )
+        sunset = (
+            pd.to_datetime(data["results"]["sunset"], utc=True)
+            .tz_convert(pacific)
+            .tz_localize(None)
+        )
+        first_light = (
+            pd.to_datetime(data["results"]["civil_twilight_begin"], utc=True)
+            .tz_convert(pacific)
+            .tz_localize(None)
+        )
+        last_light = (
+            pd.to_datetime(data["results"]["civil_twilight_end"], utc=True)
+            .tz_convert(pacific)
+            .tz_localize(None)
+        )
 
-        sun_data.append({
-            'date': date,
-            'sunrise': sunrise,
-            'sunset': sunset,
-            'first_light': first_light,
-            'last_light': last_light,
-        })
-        time.sleep(0.5) # Wait half a second between requests to avoid getting blocked
+        sun_data.append(
+            {
+                "date": date,
+                "sunrise": sunrise,
+                "sunset": sunset,
+                "first_light": first_light,
+                "last_light": last_light,
+            }
+        )
+        time.sleep(0.5)  # Wait half a second between requests to avoid getting blocked
 
     df = pd.DataFrame(sun_data).set_index("date").sort_index()
 
@@ -397,18 +397,33 @@ def fetch_data_wrapper(data_sources: Dict):
             status(f"ERROR fetching {key}: {e}")
 
     # 1. offshore swell
-    safe_fetch("ww3", fetch_ww3_timeseries, 
-               data_sources["ww3_lat"], data_sources["ww3_lon"],
-               data_sources["max_partitions"], data_sources["forecast_hours"],
-               data_sources["ww3_url"])
+    safe_fetch(
+        "ww3",
+        fetch_ww3_timeseries,
+        data_sources["ww3_lat"],
+        data_sources["ww3_lon"],
+        data_sources["max_partitions"],
+        data_sources["forecast_hours"],
+        data_sources["ww3_url"],
+    )
 
     # 2. tides
     safe_fetch("tide", fetch_tide_predictions, data_sources["tide_station"])
 
     # 3. wind
-    safe_fetch("wind", fetch_wind_forecast, data_sources["location_lat"], data_sources["location_lon"])
+    safe_fetch(
+        "wind",
+        fetch_wind_forecast,
+        data_sources["location_lat"],
+        data_sources["location_lon"],
+    )
 
     # 4. sunrise/sunset
-    safe_fetch("sun", fetch_sunrise_sunset, data_sources["location_lat"], data_sources["location_lon"])
+    safe_fetch(
+        "sun",
+        fetch_sunrise_sunset,
+        data_sources["location_lat"],
+        data_sources["location_lon"],
+    )
 
     return results

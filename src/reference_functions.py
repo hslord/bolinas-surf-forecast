@@ -12,6 +12,7 @@ def status(msg: str):
     now = datetime.now(pacific).strftime("%H:%M:%S")
     print(f"[{now}] 🌊 {msg}")
 
+
 def fetch_ww3_timeseries_latlon(lat, lon, start_deg=0.3, step=0.05, max_deg=2.0):
     """
     Returns the nearest valid WW3 ocean model grid coordinates to (lat, lon).
@@ -41,7 +42,7 @@ def fetch_ww3_timeseries_latlon(lat, lon, start_deg=0.3, step=0.05, max_deg=2.0)
         try:
             sub = ds[var_hs].sel({latname: lat_try, lonname: lon_try}, method="nearest")
             arr = sub.isel(**{time_dim: 0}).values
-            val = np.ravel(arr)[0]   # <-- SAFE SCALAR EXTRACTION
+            val = np.ravel(arr)[0]  # <-- SAFE SCALAR EXTRACTION
             return sub if not np.isnan(val) else None
         except Exception:
             return None
@@ -61,7 +62,9 @@ def fetch_ww3_timeseries_latlon(lat, lon, start_deg=0.3, step=0.05, max_deg=2.0)
         radius += step
 
     if found is None:
-        raise RuntimeError(f"No valid WW3 grid found within ±{max_deg}° of {lat}, {lon}")
+        raise RuntimeError(
+            f"No valid WW3 grid found within ±{max_deg}° of {lat}, {lon}"
+        )
 
     # Extract the final valid WW3 grid cell
     lat_valid = float(found[latname])

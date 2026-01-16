@@ -36,12 +36,16 @@ surf_model:
     south_sweet_spot: [170, 225]     # almost due south swells wrap in clean
     # Near-south angles that still work well but slightly less than perfect.
     south_edges: [150, 240]          # nearby directions with partial exposure
+    south_edge_period_mid: 8        # minimum period for bonus wrap when large
+    south_edge_base: 0.7            # minimum south edge contribution
+    south_edge_bonus: 0.25          # maximum additional wrap when period large
+
 
     # ---- WEST (classic wrap) ----
     west_range: [240, 280]           # W to WNW, classic wrapping range
     west_period_mid: 11.5             # logistic center period where wrapping starts
     west_period_k: 0.8               # steepness of period transition (higher = sharper)
-    west_height_mid: 3.0               # logistic center height for west wrap
+    west_height_mid: 3.5               # logistic center height for west wrap
     west_height_k: 0.8               # steepness of size contribution
     west_base: 0.15                   # minimum west contribution (small wrap)
     west_bonus: 0.6                  # maximum additional wrap when period+size large
@@ -54,7 +58,6 @@ surf_model:
     nw_height_k: 0.5                 # steepness of size contribution
     nw_base: 0.05                    # Dropped to 0.05: NW is weaker than West by default
     nw_bonus: 0.45                   # Max possible wrap becomes 0.50 (base + bonus)
-    nw_floor: 0.05                   # Minimum fallback
 
     # ---- BLOCKED ----
     blocked_value: 0.05              # anything outside above ranges = mostly blocked
@@ -63,15 +66,17 @@ surf_model:
   # === Nearshore shoaling and energy decay ===
   nearshore:
     base_factor: 0.85         # typical offshore→nearshore shoaling
-    min_direction_factor: 0.1 # strong suppression in bad directions
     range_factor: 0.15        # ±15% spread for min/max surf range
+    range_period_min: 10      # minimum period where range_factor starts increasing
+    range_step: 0.02          # % by which range_factor spread increases per period second > range_period_min
 
 
   # === Wave energy weight ===
   energy:
-    height_exp: 1.2           # height exponent – bigger waves grow faster than linear
-    period_exp: 0.3           # period exponent – long period increases power
-    swell_saturation: 0.35    # governs how quickly swell score approaches 10
+    height_exp: 2.0           # Physical energy density (squared height)
+    period_exp: 1.0           # Physical power/flux (linear period importance)
+    energy_k: 0.15            # controls curve steepness for all spots
+    swell_saturation: 1.0     # governs how quickly swell score approaches 10
 
 
   # === Period multiplier (groundswell vs windswell) ===
@@ -93,12 +98,19 @@ surf_model:
   wind:
     offshore_threshold_deg: 45.0   # max angle from offshore to be considered offshore
     onshore_threshold_deg: 135.0   # min angle from offshore to be considered onshore
-
-
+    offshore_weight: 1.0           # Offshore wind can be handled to a higher MPH
+    crosshore_weight: 0.6          # Crosshore wind has a medium penalty
+    onshore_weight: 0.4            # Onshore wind has the highest penalty
+    glassy_cutoff: 8.0             # MPH Speed where direction starts to fully matter
+    speed_midpoint: 13.0           # MPH Speed where even offshore surf is only 5/10
+    speed_k: 0.3                   # How fast the score drops as wind increases
 
   # === Final score weightings ===
   weights:
-    swell: 0.5                # weight of swell score in final result
-    wind: 0.2                 # weight of wind score
-    tide: 0.2                 # weight of tide score
-    baseline: 10.0             # baseline surf value (small clean surf)
+    swell: 0.5                    # weight of swell score in final result
+    wind: 0.2                     # weight of wind score
+    tide: 0.2                     # weight of tide score
+    baseline: 10.0                # baseline surf value (small clean surf)
+    wind_swell_threshold: 3.0     # The swell_score required for wind to have 100% weight; scales wind impact down for smaller surf.
+    tide_swell_offset: 5.0        # Higher offset means the tide has a "stronger vote" even on small days.
+    tide_min_influence: 0.5       # The minimum multiplier for tide influence (0.5 = 50% impact minimum)

@@ -1,9 +1,10 @@
 name: Update Bolinas Surf Forecast
 
 on:
-  schedule:
-    # This runs at 4am and 4pm Pacific Time (approx)
-    - cron: '0 0,12 * * *'
+    schedule:
+    # Runs at 02:00, 08:00, 14:00, and 20:00 UTC 
+    # (Matches 6pm, 12am, 6am, and 12pm PST)
+    - cron: '0 2,8,14,20 * * *'
   workflow_dispatch: # This adds a "Run" button to test it manually
 
 jobs:

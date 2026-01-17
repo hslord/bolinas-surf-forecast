@@ -1,7 +1,7 @@
 name: Update Bolinas Surf Forecast
 
 on:
-    schedule:
+  schedule:
     # Runs at 02:00, 08:00, 14:00, and 20:00 UTC 
     # (Matches 6pm, 12am, 6am, and 12pm PST)
     - cron: '0 2,8,14,20 * * *'

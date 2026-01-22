@@ -459,7 +459,7 @@ with st.expander("How are these scores calculated?"):
     # 1. Dynamically build the Swell help text from config
     # This loops through west_range, nw_range, south_sweet_spot, etc.
     swell_notes = []
-    for key, value in prop_cfg.items():
+    for key, value in prop_cfg["ui_ranges"].items():
         if isinstance(value, list) and len(value) == 2:
             # Format name: "west_range" -> "West Range"
             range_name = key.replace("_", " ").title()

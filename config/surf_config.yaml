@@ -31,18 +31,23 @@ data_sources:
 surf_model:
 
   propagation:
-    # ---- SOUTH (unblocked directions) ----
-    # Degrees where swell points directly into Bolinas and is fully exposed.
-    south_sweet_spot: [170, 225]     # almost due south swells wrap in clean
-    # Near-south angles that still work well but slightly less than perfect.
-    south_edges: [150, 240]          # nearby directions with partial exposure
-    south_edge_period_mid: 8        # minimum period for bonus wrap when large
-    south_edge_base: 0.7            # minimum south edge contribution
-    south_edge_bonus: 0.25          # maximum additional wrap when period large
+    south_sweet_spot:
+      center: 195
+      width: 35        # Wide enough to cover 160° to 230°
+      steepness: 0.4   # Smooth fade-out toward the edges
+    
+    west_wrap:
+      center: 260
+      width: 20        # Focused on the reef's primary window
+      steepness: 0.5   # Sharper transition as it clears the cliff
+    
+    nw_reef_gate:
+      center: 290
+      width: 10        # The "on/off" switch
+      steepness: 0.6   # sharp physical shadowing
+        
 
-
-    # ---- WEST (classic wrap) ----
-    west_range: [240, 280]           # W to WNW, classic wrapping range
+   # ---- WEST (classic wrap) ----
     west_period_mid: 11.5             # logistic center period where wrapping starts
     west_period_k: 0.8               # steepness of period transition (higher = sharper)
     west_height_mid: 3.5               # logistic center height for west wrap
@@ -51,7 +56,6 @@ surf_model:
     west_bonus: 0.6                  # maximum additional wrap when period+size large
     
     # ---- NW (rare wrap events) ----
-    nw_range: [280, 300]             # NW to NNW — heavily blocked normally
     nw_period_mid: 11.5              # Logistic center: is the "unlock" point for Bolinas wrap
     nw_period_k: 0.8                 # steepness of period transition (higher = sharper) 
     nw_height_mid: 5.0               # Logistic center: offshore size needed for meaningful wrap
@@ -62,6 +66,13 @@ surf_model:
     # ---- BLOCKED ----
     blocked_value: 0.05              # anything outside above ranges = mostly blocked
 
+    # ---- UI Labels (Used for display only) ----
+    ui_ranges:
+      south_swell: [150, 225]
+      southwest_wrap: [225, 245]
+      west_range: [245, 280]
+      nw_range: [280, 310]
+      
 
   # === Nearshore shoaling and energy decay ===
   nearshore:

@@ -160,9 +160,9 @@ def bolinas_wave_propagation(
     """
     Purpose
     -------
-    Compute the Bolinas directional propagation factor for a single offshore
-    swell, based strictly on coastline geometry and empirically tuned wrap
-    parameters supplied in the configuration.
+    Compute the Bolinas blended directional propagation factor for a single offshore
+    swell, based on coastline geometry weighting three directional windows
+    (South, West, NW) using logistic smoothing.
 
     Parameters
     ----------
@@ -181,68 +181,63 @@ def bolinas_wave_propagation(
     float
         Propagation factor in the range [0, 1].
     """
+    def calculate_window_weight(angle, center, width, steepness):
+        # The 'Weight' of this window based on swell direction
+        # Result is 1.0 inside the core and tapers to 0.0 outside
+        return 1.0 / (1.0 + np.exp(steepness * (abs(angle - center) - width)))
 
-    # SOUTH SWEET SPOT
-    south_sweet_min, south_sweet_max = propagation_cfg["south_sweet_spot"]
-    if south_sweet_min <= direction_deg <= south_sweet_max:
-        return 1.0
+    def calculate_performance_factor(mid_val, k_val, current_val):
+        # Reusable logistic curve 
+        return 1.0 / (1.0 + np.exp(-(current_val - mid_val) * k_val))
 
-    # SOUTH EDGES
-    south_edge_min, south_edge_max = propagation_cfg["south_edges"]
-    if (south_edge_min <= direction_deg < south_sweet_min) or (
-        south_sweet_max < direction_deg <= south_edge_max
-    ):
-        edge_boost = np.clip(
-            (period_sec - propagation_cfg["south_edge_period_mid"]) / 10,
-            0,
-            propagation_cfg["south_edge_bonus"],
-        )
-        return propagation_cfg["south_edge_base"] + edge_boost
-
-    # WEST WRAP (logistic)
-    west_min, west_max = propagation_cfg["west_range"]
-    if west_min <= direction_deg <= west_max:
-        wrap = 1.0 / (
-            1.0
-            + np.exp(
-                -(period_sec - propagation_cfg["west_period_mid"])
-                * propagation_cfg["west_period_k"]
-            )
-        )
-        size = 1.0 / (
-            1.0
-            + np.exp(
-                -(height_ft - propagation_cfg["west_height_mid"])
-                * propagation_cfg["west_height_k"]
-            )
-        )
-        # baseline + conditional bonus
-        return (
-            propagation_cfg["west_base"] + propagation_cfg["west_bonus"] * wrap * size
+    # 1. CALCULATE WEIGHTS 
+    weights = {}
+    for window in ["south_sweet_spot", "west_wrap", "nw_reef_gate"]:
+        cfg = propagation_cfg[window]
+        weights[window] = calculate_window_weight(
+            direction_deg, cfg["center"], cfg["width"], cfg["steepness"]
         )
 
-    # NW WRAP (logistic)
-    nw_min, nw_max = propagation_cfg["nw_range"]
-    if nw_min <= direction_deg <= nw_max:
-        wrap = 1.0 / (
-            1.0
-            + np.exp(
-                -(period_sec - propagation_cfg["nw_period_mid"])
-                * propagation_cfg["nw_period_k"]
-            )
-        )
-        size = 1.0 / (
-            1.0
-            + np.exp(
-                -(height_ft - propagation_cfg["nw_height_mid"])
-                * propagation_cfg["nw_height_k"]
-            )
-        )
-        # baseline + conditional bonus
-        return propagation_cfg["nw_base"] + propagation_cfg["nw_bonus"] * wrap * size
+    # 2. CALCULATE WINDOW-SPECIFIC SCORES
+    # South Logic: full swell
+    score_south = 1.0 
 
-    # BLOCKED
-    return propagation_cfg["blocked_value"]
+    # West Logic: Highly dependent on period/height to wrap onto the reef
+    west_wrap_factor = calculate_performance_factor(
+        propagation_cfg["west_period_mid"], propagation_cfg["west_period_k"], period_sec
+    )
+    west_size_factor = calculate_performance_factor(
+        propagation_cfg["west_height_mid"], propagation_cfg["west_height_k"], height_ft
+    )
+    score_west = propagation_cfg["west_base"] + (
+        propagation_cfg["west_bonus"] * west_wrap_factor * west_size_factor
+    )
+
+    # NW Logic: The Gate requires even more energy to wrap around Duxbury
+    nw_wrap_factor = calculate_performance_factor(
+        propagation_cfg["nw_period_mid"], propagation_cfg["nw_period_k"], period_sec
+    )
+    nw_size_factor = calculate_performance_factor(
+        propagation_cfg["nw_height_mid"], propagation_cfg["nw_height_k"], height_ft
+    )
+    score_nw = propagation_cfg["nw_base"] + (
+        propagation_cfg["nw_bonus"] * nw_wrap_factor * nw_size_factor
+    )
+
+    # 3. COMPUTE WEIGHTED AVERAGE
+    # This prevents the score jump by blending scores based on directional overlap
+    total_weight = sum(weights.values())
+    
+    if total_weight < 0.01:
+        return propagation_cfg["blocked_value"]
+
+    final_score = (
+        (score_south * weights["south_sweet_spot"]) +
+        (score_west * weights["west_wrap"]) +
+        (score_nw * weights["nw_reef_gate"])
+    ) / total_weight
+
+    return max(propagation_cfg["blocked_value"], final_score)
 
 
 def predict_bolinas_surf_height(

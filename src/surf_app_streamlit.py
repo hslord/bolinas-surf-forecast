@@ -49,15 +49,15 @@ prop_cfg = config["surf_model"]["propagation"]
 # Convert degrees to simple cardinal directions or arrows
 def categorize_bolinas_swell(deg):
     # Pull ranges from config
-    s_sweet = prop_cfg["south_sweet_spot"]
-    s_edges = prop_cfg["south_edges"]
-    w_range = prop_cfg["west_range"]
-    nw_range = prop_cfg["nw_range"]
+    s_sweet = prop_cfg["ui_ranges"]["south_swell"]
+    s_edges = prop_cfg["ui_ranges"]["southwest_wrap"]
+    w_range = prop_cfg["ui_ranges"]["west_range"]
+    nw_range = prop_cfg["ui_ranges"]["nw_range"]
 
     if s_sweet[0] <= deg <= s_sweet[1]:
         return "🎯 S Sweet Spot"
     elif s_edges[0] <= deg <= s_edges[1]:
-        return "🌊 S Edge"
+        return "🌊 SW Edge"
     elif w_range[0] <= deg <= w_range[1]:
         return "🌀 W Wrap"
     elif nw_range[0] <= deg <= nw_range[1]:
@@ -121,11 +121,9 @@ forecast_df["Secondary"] = (
 )
 
 forecast_df["Wind"] = (
-    # forecast_df["Wind Speed (MPH)"].round(0).astype(int).astype(str) + "g" +
     forecast_df["Wind Speed (MPH)"].fillna(0).round(0).astype(int).astype(str)
     + "g"
     +
-    # forecast_df["Wind Gust (MPH)"].round(0).astype(int).astype(str) + " " +
     forecast_df["Wind Gust (MPH)"].fillna(0).round(0).astype(int).astype(str)
     + " "
     + forecast_df["Wind Direction"].astype(str)
@@ -494,7 +492,6 @@ def build_night_rects(df):
     if "is_daylight" not in df.columns:
         return pd.DataFrame(columns=["start", "end"])
 
-    # df = df.reset_index().rename(columns={"index": "datetime"})
     rects = []
     in_block = False
     start_time = None

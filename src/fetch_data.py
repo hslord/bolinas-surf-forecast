@@ -12,31 +12,6 @@ from reference_functions import status
 
 pacific = ZoneInfo("America/Los_Angeles")
 
-
-def detect_var(ds: xr.Dataset, keywords: List[str]):
-    """
-    Find the first data variable name containing all given keywords.
-
-    Parameters
-    ----------
-    ds : xarray.Dataset
-        Dataset whose variable names will be searched.
-    keywords : list of str
-        List of case-insensitive substrings that must all appear in
-        the variable name.
-
-    Returns
-    -------
-    str or None
-        Name of the first matching variable, or None if no match is found.
-    """
-    for v in ds.data_vars:
-        name = v.lower()
-        if all(k in name for k in keywords):
-            return v
-    return None
-
-
 def fetch_ww3_timeseries(
     lat_valid: float,
     lon_valid: float,
@@ -168,6 +143,50 @@ def fetch_ww3_timeseries(
     status(f"WW3 subset loaded: {len(df)} swell partitions found.")
 
     return df
+
+def fetch_cdip_mop_forecast(mop_number, min_swell_frequency, forecast_model='ecmwf'):
+    """
+        Fetch alongshore swell forecast data from CDIP MOP THREDDS servers
+        and filter by frequency to isolate surfable period swell.
+
+        Parameters
+        ----------
+        mop_number : str or int
+            CDIP Monitoring and Prediction (MOP) identifier (e.g., 'MA147').
+        min_swell_frequency : float
+            The upper frequency bound (Hz) for filtering. Only frequencies 
+            below this value are kept (e.g., 0.1 Hz corresponds to 10s period).
+        forecast_model : {'ecmwf', 'ncep'}, optional
+            The atmospheric model used for the wave forecast. 
+            Default is 'ecmwf'.
+
+        Returns
+        -------
+        xarray.Dataset
+            Filtered wave data containing frequency-dependent variables 
+            like wave energy density and direction, indexed by time and frequency.
+    """
+    status(f"Fetching swell forecast for MOP {mop_number}...")
+    # MOP THREDDS OPeNDAP
+    if forecast_model == 'ncep':
+        fc_url = (
+            "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
+            f"cdip/model/MOP_alongshore/{mop_number}_forecast.nc"
+        )
+    else:
+        fc_url = (
+        "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
+        f"cdip/model/MOP_alongshore/{mop_number}_ecmwf_fc.nc"
+        )
+
+    fc_swell = xr.open_dataset(fc_url, engine='netcdf4')
+
+    # Filter to swell band (periods > 10s, i.e. frequencies < 0.1 Hz)
+    fc_swell = fc_swell.sel(waveFrequency=fc_swell.waveFrequency[fc_swell.waveFrequency < min_swell_frequency])
+
+    status(f"Retrieved swell forecast.")
+
+    return fc_swell
 
 
 def fetch_tide_predictions(station_id: str, days: int = 14):
@@ -383,6 +402,7 @@ def fetch_data_wrapper(data_sources: Dict):
     """
     results = {
         "ww3": None,
+        "cdip_mop": None,
         "tide": None,
         "wind": None,
         "sun": None,
@@ -396,7 +416,7 @@ def fetch_data_wrapper(data_sources: Dict):
         except Exception as e:
             status(f"ERROR fetching {key}: {e}")
 
-    # 1. offshore swell
+    # offshore swell
     safe_fetch(
         "ww3",
         fetch_ww3_timeseries,
@@ -407,10 +427,18 @@ def fetch_data_wrapper(data_sources: Dict):
         data_sources["ww3_url"],
     )
 
-    # 2. tides
+    # shallow water (15M) mop forecast
+    safe_fetch("cdip_mop",
+                fetch_cdip_mop_forecast,
+                 data_sources["mop_number"], 
+                 data_sources["min_swell_frequency"], 
+                 data_sources["forecast_model"]
+                )
+
+    # tides
     safe_fetch("tide", fetch_tide_predictions, data_sources["tide_station"])
 
-    # 3. wind
+    # wind
     safe_fetch(
         "wind",
         fetch_wind_forecast,
@@ -418,7 +446,7 @@ def fetch_data_wrapper(data_sources: Dict):
         data_sources["location_lon"],
     )
 
-    # 4. sunrise/sunset
+    # sunrise/sunset
     safe_fetch(
         "sun",
         fetch_sunrise_sunset,

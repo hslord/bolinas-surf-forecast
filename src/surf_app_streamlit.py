@@ -4,6 +4,8 @@ import altair as alt
 from pathlib import Path
 import yaml
 import numpy as np
+import os
+from datetime import datetime
 
 st.title("🌊 Bolinas Surf Forecast")
 
@@ -39,7 +41,7 @@ def load_config():
 
 
 config = load_config()
-prop_cfg = config["surf_model"]["propagation"]
+surf_cfg = config["surf_model"]
 
 # =======================================================================================
 # DATA FORMATTING
@@ -49,17 +51,17 @@ prop_cfg = config["surf_model"]["propagation"]
 # Convert degrees to simple cardinal directions or arrows
 def categorize_bolinas_swell(deg):
     # Pull ranges from config
-    s_sweet = prop_cfg["ui_ranges"]["south_swell"]
-    s_edges = prop_cfg["ui_ranges"]["southwest_wrap"]
-    w_range = prop_cfg["ui_ranges"]["west_range"]
-    nw_range = prop_cfg["ui_ranges"]["nw_range"]
+    s_sweet = surf_cfg["ui_ranges"]["south_swell"]
+    s_edges = surf_cfg["ui_ranges"]["southwest_wrap"]
+    w_range = surf_cfg["ui_ranges"]["west_range"]
+    nw_range = surf_cfg["ui_ranges"]["nw_range"]
 
     if s_sweet[0] <= deg <= s_sweet[1]:
-        return "🎯 S Sweet Spot"
+        return "🎯 South Swell"
     elif s_edges[0] <= deg <= s_edges[1]:
         return "🌊 SW Edge"
     elif w_range[0] <= deg <= w_range[1]:
-        return "🌀 W Wrap"
+        return "🌀 West Wrap"
     elif nw_range[0] <= deg <= nw_range[1]:
         return "🛡️ NW Shadowed"
     else:
@@ -180,14 +182,19 @@ def summary_card(column, title, value, color="inherit", help_text=None):
         )
 
 
+
 # 3. Render Cards
 summary_card(
     c1,
-    "Current Surf",
+    "Latest Surf",
     f"{current['Surf Height Min (ft)']}–{current['Surf Height Max (ft)']} ft",
 )
+data_path = "../data/forecast_df.parquet"
+mtime = os.path.getmtime(data_path)
+last_updated_dt = datetime.fromtimestamp(mtime)
+st.caption(f"Last updated: {last_updated_dt.strftime('%b %d, %I:%M %p')}")
 
-summary_card(c2, "Current Score", f"{curr_score}/10", color=get_score_color(curr_score))
+summary_card(c2, "Latest Score", f"{curr_score}/10", color=get_score_color(curr_score))
 
 summary_card(
     c3,
@@ -196,6 +203,7 @@ summary_card(
     color=get_score_color(best_score),
     help_text=f"Best window: {best_row['datetime'].strftime('%b %d, %I:%M %p')}",
 )
+
 
 # =======================================================================================
 # TOP SESSIONS
@@ -459,7 +467,7 @@ with st.expander("How are these scores calculated?"):
     # 1. Dynamically build the Swell help text from config
     # This loops through west_range, nw_range, south_sweet_spot, etc.
     swell_notes = []
-    for key, value in prop_cfg["ui_ranges"].items():
+    for key, value in surf_cfg["ui_ranges"].items():
         if isinstance(value, list) and len(value) == 2:
             # Format name: "west_range" -> "West Range"
             range_name = key.replace("_", " ").title()
@@ -472,7 +480,7 @@ with st.expander("How are these scores calculated?"):
     - **Swell:** Optimized for propagation from:  
       {swell_help}
     - **Wind:** Optimized for offshore flow relative to the coast orientation of **{config["data_sources"]["coast_orientation"]}°**.
-    - **Tide:** The "Tide Score" is highest when the height is between **{config["surf_model"]["tide"]["optimal_low"]}ft** and **{config["surf_model"]["tide"]["optimal_high"]}ft**.
+    - **Tide:** The "Tide Score" is highest when the height is between **-1 and 3 ft**.
     """)
 
 # =======================================================================================
@@ -657,3 +665,51 @@ st.download_button(
     file_name="bolinas_surf_forecast.csv",
     mime="text/csv",
 )
+
+
+# 1. Define the file path
+FEEDBACK_DIR = "../data/"
+FEEDBACK_FILE = os.path.join(FEEDBACK_DIR, "user_feedback.csv")
+
+# Ensure the directory exists so the app doesn't crash
+if not os.path.exists(FEEDBACK_DIR):
+    os.makedirs(FEEDBACK_DIR)
+
+st.subheader("Report Live Conditions")
+st.info("Your feedback helps tune the Bolinas Surf Forecast.")
+
+with st.form("surf_report_form", clear_on_submit=True):
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        observed_min = st.number_input("Observed Min Height (ft)", min_value=0.0, max_value=20.0, value=2.0, step=0.5)
+    with col2:
+        observed_max = st.number_input("Observed Max Height (ft)", min_value=0.0, max_value=20.0, value=3.0, step=0.5)
+        
+    user_score = st.select_slider(
+        "Overall Session Score (1-10)", 
+        options=range(1, 11), 
+        value=5,
+        help="How good was the actual surf quality?"
+    )
+    
+    comments = st.text_area("Freeform Feedback", placeholder="e.g. 'Closing out on the sets' or 'Wind stayed offshore longer than predicted'")
+    
+    submitted = st.form_submit_button("Submit Report")
+
+    if submitted:
+        new_entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "obs_min": observed_min,
+            "obs_max": observed_max,
+            "user_score": user_score,
+            "comments": comments.replace(",", ";")
+        }
+        
+        df = pd.DataFrame([new_entry])
+        
+        # Append to the file in the ../data/ folder
+        file_exists = os.path.isfile(FEEDBACK_FILE)
+        df.to_csv(FEEDBACK_FILE, mode='a', index=False, header=not file_exists)
+        
+        st.success(f"Thank you for your feedback!")

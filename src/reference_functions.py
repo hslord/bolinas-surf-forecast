@@ -1,8 +1,8 @@
 # IMPORTS
 import xarray as xr
-import pandas as pd
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import numpy as np
 
 pacific = ZoneInfo("America/Los_Angeles")
 
@@ -39,13 +39,10 @@ def fetch_ww3_timeseries_latlon(lat, lon, start_deg=0.3, step=0.05, max_deg=2.0)
 
     # Try nearest point search
     def try_point(lat_try, lon_try):
-        try:
-            sub = ds[var_hs].sel({latname: lat_try, lonname: lon_try}, method="nearest")
-            arr = sub.isel(**{time_dim: 0}).values
-            val = np.ravel(arr)[0]  # <-- SAFE SCALAR EXTRACTION
-            return sub if not np.isnan(val) else None
-        except Exception:
-            return None
+        sub = ds[var_hs].sel({latname: lat_try, lonname: lon_try}, method="nearest")
+        arr = sub.isel(**{time_dim: 0}).values
+        val = np.ravel(arr)[0]  # <-- SAFE SCALAR EXTRACTION
+        return sub if not np.isnan(val) else None
 
     found = None
     radius = start_deg

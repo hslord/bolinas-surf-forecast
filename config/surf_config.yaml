@@ -1,8 +1,5 @@
 data_sources:
 
-  # Debug to be used in dev
-  debug: False # Turn on to true if debugging to make bottlenecks run faster
-
   # Geographic location for Bolinas surf point
   # (used to pick sunrise/sunset and wind forecasts)
   location_lat: 37.9094     # decimal degrees (Bolinas beach approx)
@@ -14,6 +11,11 @@ data_sources:
   ww3_lon: 237.0            # WW3 grid longitude (0–360 longitude format)
   max_partitions: 3         # maximum number of unique swells to partition from WW3
   ww3_url: "https://thredds.ucar.edu/thredds/dodsC/grib/NCEP/WW3/Global/Best/latest" # URL for fetching the ww3 forecast
+
+  # CDIP MOP Parameters
+  mop_number: "MA147" # MA147 matches the patch location
+  min_swell_frequency: 0.12 # 0.1 Hz = 10-second period 
+  forecast_model: 'ecmwf' # 'ecmwf' (European) is generally more accurate for long-range coastal swells. 'ncep' (GFS) is the American alternative.
 
   # NOAA tide station ID (9414290 = SF Golden Gate)
   # Alternatives:
@@ -30,98 +32,59 @@ data_sources:
 
 surf_model:
 
-  propagation:
-    south_sweet_spot:
-      center: 195
-      width: 35        # Wide enough to cover 160° to 230°
-      steepness: 0.4   # Smooth fade-out toward the edges
-    
-    west_wrap:
-      center: 260
-      width: 20        # Focused on the reef's primary window
-      steepness: 0.5   # Sharper transition as it clears the cliff
-    
-    nw_reef_gate:
-      center: 290
-      width: 10        # The "on/off" switch
-      steepness: 0.6   # sharp physical shadowing
-        
-
-   # ---- WEST (classic wrap) ----
-    west_period_mid: 11.5             # logistic center period where wrapping starts
-    west_period_k: 0.8               # steepness of period transition (higher = sharper)
-    west_height_mid: 3.5               # logistic center height for west wrap
-    west_height_k: 0.8               # steepness of size contribution
-    west_base: 0.15                   # minimum west contribution (small wrap)
-    west_bonus: 0.6                  # maximum additional wrap when period+size large
-    
-    # ---- NW (rare wrap events) ----
-    nw_period_mid: 11.5              # Logistic center: is the "unlock" point for Bolinas wrap
-    nw_period_k: 0.8                 # steepness of period transition (higher = sharper) 
-    nw_height_mid: 5.0               # Logistic center: offshore size needed for meaningful wrap
-    nw_height_k: 0.5                 # steepness of size contribution
-    nw_base: 0.05                    # Dropped to 0.05: NW is weaker than West by default
-    nw_bonus: 0.45                   # Max possible wrap becomes 0.50 (base + bonus)
-
-    # ---- BLOCKED ----
-    blocked_value: 0.05              # anything outside above ranges = mostly blocked
-
-    # ---- UI Labels (Used for display only) ----
-    ui_ranges:
-      south_swell: [150, 225]
-      southwest_wrap: [225, 245]
-      west_range: [245, 280]
-      nw_range: [280, 310]
+  spectral_scoring:
+      # Height Scoring (Hs)
+      hs_min_m: 0.3          # Waves smaller than this (in meters) get 0 score
+      hs_full_credit_m: 1.5  # Waves this size or larger get 1.0 score
       
+      # Period Scoring (Tp)
+      tp_min_s: 10.0         # Periods below this get 0 score
+      tp_full_credit_s: 16.0 # Periods this long or longer get 1.0 score
+      
+      # Directional Spread Scoring
+      spread_min_deg: 5.0    # "Ideal" narrow spread (lower = cleaner)
+      spread_max_deg: 20.0   # Spread above this is considered disorganized/junk 
+      
+      # Weighting
+      w_hs: 0.30  # Height
+      w_tp: 0.50  # Period 
+      w_sp: 0.20  # Spread 
 
+  # ---- UI Labels (Used for display only) ----
+  ui_ranges:
+    south_swell: [150, 225]
+    southwest_wrap: [225, 245]
+    west_range: [245, 280]
+    nw_range: [280, 310]
+    
   # === Nearshore shoaling and energy decay ===
   nearshore:
-    base_factor: 0.85         # typical offshore→nearshore shoaling
     range_factor: 0.15        # ±15% spread for min/max surf range
-    range_period_min: 10      # minimum period where range_factor starts increasing
-    range_step: 0.02          # % by which range_factor spread increases per period second > range_period_min
+    range_period_min: 12      # minimum period where range_factor starts increasing
+    range_step: 0.01          # % by which range_factor spread increases per period second > range_period_min
 
-
-  # === Wave energy weight ===
-  energy:
-    height_exp: 2.0           # Physical energy density (squared height)
-    period_exp: 1.0           # Physical power/flux (linear period importance)
-    energy_k: 0.15            # controls curve steepness for all spots
-    swell_saturation: 1.0     # governs how quickly swell score approaches 10
-
-
-  # === Period multiplier (groundswell vs windswell) ===
-  period_multiplier:
-    min: 0.3                  # minimum multiplier (short-period wind swell)
-    max: 1.2                  # maximum multiplier (long-period groundswell)
-    midpoint: 10              # period at midpoint of logistic curve
-    steepness: 0.8            # how quickly multiplier transitions around midpoint
-
-
-  # === Tide scoring ===
+# === Tide scoring ===
   tide:
-    optimal_low: -1.0         # ideal tide window lower bound (ft MLLW)
-    optimal_high: 3.0         # ideal tide window upper bound
-    edge_score: 8.5           # the tide score at the optimal_high and optimal_low edges
-    outside_decay: 1.0        # the speed of tide quality dropoff outside the optimal window
+    optimal_height: 1.0       # The perfect tide height in feet MLLW (center of Gaussian)
+    sigma: 2.5                # The width of the curve; larger = more tide-tolerant break
+    penalty_min: 0.1         # The lowest possible multiplier (even in a deep high tide)
 
   # === Wind categorization ===
   wind:
     offshore_threshold_deg: 45.0   # max angle from offshore to be considered offshore
     onshore_threshold_deg: 135.0   # min angle from offshore to be considered onshore
-    offshore_weight: 1.0           # Offshore wind can be handled to a higher MPH
-    crosshore_weight: 0.6          # Crosshore wind has a medium penalty
-    onshore_weight: 0.4            # Onshore wind has the highest penalty
-    glassy_cutoff: 8.0             # MPH Speed where direction starts to fully matter
-    speed_midpoint: 13.0           # MPH Speed where even offshore surf is only 5/10
-    speed_k: 0.3                   # How fast the score drops as wind increases
+    # Directional impact on Effective Speed
+    # Lower value = wind speed is penalized LESS (offshore)
+    offshore_penalty_weight: 0.7  
+    crosshore_penalty_weight: 1.0
+    onshore_penalty_weight: 1.0
+    gust_weight: 0.3         # 0.5 means the gust and steady wind are equally important
+    speed_floor: 5.0          # Wind speed below this has 0 penalty (glassy)
+    speed_range: 13.0         # The divisor; how many mph it takes to go from glass to blown out
+    penalty_min: 0.25          # The lowest possible multiplier (blown out)
 
-  # === Final score weightings ===
-  weights:
-    swell: 0.5                    # weight of swell score in final result
-    wind: 0.2                     # weight of wind score
-    tide: 0.2                     # weight of tide score
-    baseline: 10.0                # baseline surf value (small clean surf)
-    wind_swell_threshold: 3.0     # The swell_score required for wind to have 100% weight; scales wind impact down for smaller surf.
-    tide_swell_offset: 5.0        # Higher offset means the tide has a "stronger vote" even on small days.
-    tide_min_influence: 0.5       # The minimum multiplier for tide influence (0.5 = 50% impact minimum)
+  final_scoring:
+    wind_impact_weight: 0.60   # Max reduction from wind
+    tide_impact_weight: 0.60   # Max reduction from tide
+    min_multiplier: 0.20       # Absolute floor
+    secondary_penalty: 0.2     # Primary penalty is 100%, secondary penalty is x%

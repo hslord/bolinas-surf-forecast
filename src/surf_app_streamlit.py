@@ -3,43 +3,47 @@ import pandas as pd
 import altair as alt
 from pathlib import Path
 import yaml
+import os
+from datetime import datetime
 import numpy as np
 
 st.title("🌊 Bolinas Surf Forecast")
+
+# =======================================================================================
+# GLOBAL PATHS
+# =======================================================================================
+BASE_DIR = Path(__file__).resolve().parents[1]
+DATA_PATH = BASE_DIR / "data" / "forecast_df.parquet"
+CONFIG_PATH = BASE_DIR / "config" / "surf_config.yaml"
+FEEDBACK_FILE = BASE_DIR / "data" / "user_feedback.csv"
 
 
 # =======================================================================================
 # DATA LOADING (pkl)
 # =======================================================================================
-@st.cache_data(ttl=3600, show_spinner=True)  # Added TTL (1 hour) to force refreshes
+@st.cache_data(ttl=3600, show_spinner=True)
 def load_forecast():
-    # repo root logic is good
-    base_dir = Path(__file__).resolve().parents[1]
-    parquet_path = base_dir / "data" / "forecast_df.parquet"
 
-    if not parquet_path.exists():
-        st.error(f"Parquet file not found at: {parquet_path}")
+    if not DATA_PATH.exists():
+        st.error(f"Parquet file not found at: {DATA_PATH}")
         st.stop()
 
-    return pd.read_parquet(parquet_path)
+    return pd.read_parquet(DATA_PATH)
 
 
 forecast_df = load_forecast()
-# Ensure datetime index (important for .pkl loads)
 if not isinstance(forecast_df.index, pd.DatetimeIndex):
     forecast_df.index = pd.to_datetime(forecast_df.index)
 
 
 @st.cache_data
 def load_config():
-    base_dir = Path(__file__).resolve().parents[1]  # repo root
-    config_path = base_dir / "config" / "surf_config.yaml"
-    with open(config_path, "r") as f:
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 config = load_config()
-prop_cfg = config["surf_model"]["propagation"]
+surf_cfg = config["surf_model"]
 
 # =======================================================================================
 # DATA FORMATTING
@@ -49,17 +53,17 @@ prop_cfg = config["surf_model"]["propagation"]
 # Convert degrees to simple cardinal directions or arrows
 def categorize_bolinas_swell(deg):
     # Pull ranges from config
-    s_sweet = prop_cfg["ui_ranges"]["south_swell"]
-    s_edges = prop_cfg["ui_ranges"]["southwest_wrap"]
-    w_range = prop_cfg["ui_ranges"]["west_range"]
-    nw_range = prop_cfg["ui_ranges"]["nw_range"]
+    s_sweet = surf_cfg["ui_ranges"]["south_swell"]
+    s_edges = surf_cfg["ui_ranges"]["southwest_wrap"]
+    w_range = surf_cfg["ui_ranges"]["west_range"]
+    nw_range = surf_cfg["ui_ranges"]["nw_range"]
 
     if s_sweet[0] <= deg <= s_sweet[1]:
-        return "🎯 S Sweet Spot"
+        return "🎯 South Swell"
     elif s_edges[0] <= deg <= s_edges[1]:
         return "🌊 SW Edge"
     elif w_range[0] <= deg <= w_range[1]:
-        return "🌀 W Wrap"
+        return "🌀 West Wrap"
     elif nw_range[0] <= deg <= nw_range[1]:
         return "🛡️ NW Shadowed"
     else:
@@ -85,6 +89,17 @@ def get_score_color(val):
             int(15 + f * (113 - 15)),
         )
     return f"rgb({r}, {g}, {b})"
+
+
+def circular_mean_deg(series):
+    """Compute mean of compass directions using vector averaging."""
+    rads = np.deg2rad(series.dropna())
+    if len(rads) == 0:
+        return np.nan
+    return np.rad2deg(np.arctan2(np.sin(rads).mean(), np.cos(rads).mean())) % 360
+
+
+circular_mean_deg.__name__ = "mean"
 
 
 # This is the specific version for pandas .style (tables)
@@ -123,8 +138,7 @@ forecast_df["Secondary"] = (
 forecast_df["Wind"] = (
     forecast_df["Wind Speed (MPH)"].fillna(0).round(0).astype(int).astype(str)
     + "g"
-    +
-    forecast_df["Wind Gust (MPH)"].fillna(0).round(0).astype(int).astype(str)
+    + forecast_df["Wind Gust (MPH)"].fillna(0).round(0).astype(int).astype(str)
     + " "
     + forecast_df["Wind Direction"].astype(str)
 )
@@ -183,11 +197,14 @@ def summary_card(column, title, value, color="inherit", help_text=None):
 # 3. Render Cards
 summary_card(
     c1,
-    "Current Surf",
+    "Latest Surf",
     f"{current['Surf Height Min (ft)']}–{current['Surf Height Max (ft)']} ft",
 )
+mtime = os.path.getmtime(DATA_PATH)
+last_updated_dt = datetime.fromtimestamp(mtime)
+st.caption(f"Last updated: {last_updated_dt.strftime('%b %d, %I:%M %p')}")
 
-summary_card(c2, "Current Score", f"{curr_score}/10", color=get_score_color(curr_score))
+summary_card(c2, "Latest Score", f"{curr_score}/10", color=get_score_color(curr_score))
 
 summary_card(
     c3,
@@ -197,6 +214,7 @@ summary_card(
     help_text=f"Best window: {best_row['datetime'].strftime('%b %d, %I:%M %p')}",
 )
 
+
 # =======================================================================================
 # TOP SESSIONS
 # =======================================================================================
@@ -204,7 +222,7 @@ summary_card(
 st.subheader("🏆 Best Upcoming Sessions")
 
 # 1. User Input for filtering
-min_score = st.slider("Minimum Surf Score to include:", 1.0, 10.0, 5.0, step=0.5)
+min_score = st.slider("Minimum Surf Score to include:", 1.0, 10.0, 6.0, step=0.5)
 
 # 2. Filter for daylight and user's score threshold
 good_windows = forecast_df[
@@ -224,7 +242,8 @@ if not good_windows.empty:
             "Surf Score (1-10)": "max",
             "Surf Height Min (ft)": "mean",
             "Surf Height Max (ft)": "mean",
-            "Wind": "first",  # Show the wind at the start of the session
+            "Wind Speed (MPH)": ["min", "max"],
+            "Wind Direction": "first",
             "Dominant": "first",
             "Secondary": "first",
             "Tide (ft)": "first",
@@ -238,11 +257,23 @@ if not good_windows.empty:
         "max_score",
         "surf_min",
         "surf_max",
-        "wind",
+        "wind_speed_min",
+        "wind_speed_max",
+        "wind_direction",
         "dom_swell",
         "sec_swell",
         "tide",
     ]
+
+    def format_wind_range(row):
+        w_min = round(row["wind_speed_min"])
+        w_max = round(row["wind_speed_max"])
+        w_direction = row["wind_direction"]
+        if w_min == w_max:
+            return f"{w_min} {w_direction}"
+        return f"{w_min}–{w_max} {w_direction}"
+
+    sessions["wind_range"] = sessions.apply(format_wind_range, axis=1)
 
     # Calculate Duration
     # a window from 8am to 10am actually represents the 8-9, 9-10, and 10-11 blocks
@@ -279,18 +310,18 @@ if not good_windows.empty:
                 "Length",
                 "max_score",
                 "Surf (ft)",
-                "wind",
+                "wind_range",
                 "dom_swell",
                 "sec_swell",
                 "tide",
             ]
-        ].style.applymap(style_surf_score, subset=["max_score"]),
+        ].style.map(style_surf_score, subset=["max_score"]),
         column_config={
             "Window": "Time Block",
             "Length": "Length",
             "max_score": "Peak Score",
             "Surf (ft)": "Avg Size (ft)",
-            "wind": "Start Wind",
+            "wind_range": "Wind Range (MPH)",
             "dom_swell": "Dominant Swell",
             "sec_swell": "Secondary Swell",
             "tide": "Start Tide",
@@ -318,10 +349,10 @@ daily_summary = daylight_df.groupby("Date").agg(
         "Surf Height Max (ft)": "max",
         "Dominant Swell Period": "mean",
         "Dominant Swell Size (ft)": "mean",
-        "Dominant Swell Direction": "mean",
+        "Dominant Swell Direction": circular_mean_deg,
         "Secondary Swell Period": "mean",
         "Secondary Swell Size (ft)": "mean",
-        "Secondary Swell Direction": "mean",
+        "Secondary Swell Direction": circular_mean_deg,
         "Wind Speed (MPH)": ["min", "max"],
     }
 )
@@ -340,25 +371,45 @@ daily_summary["Surf Range"] = (
 )
 
 daily_summary["Avg Dominant Swell"] = (
-    daily_summary["Dominant Swell Size (ft)_mean"].round(0).astype(int).astype(str)
+    daily_summary["Dominant Swell Size (ft)_mean"]
+    .fillna(0)
+    .round(0)
+    .astype(int)
+    .astype(str)
     + "ft @ "
-    + daily_summary["Dominant Swell Period_mean"].round(0).astype(int).astype(str)
+    + daily_summary["Dominant Swell Period_mean"]
+    .fillna(0)
+    .round(0)
+    .astype(int)
+    .astype(str)
     + "s "
-    + daily_summary["Dominant Swell Direction_mean"].apply(categorize_bolinas_swell)
+    + daily_summary["Dominant Swell Direction_mean"]
+    .fillna(0)
+    .apply(categorize_bolinas_swell)
 )
 
 daily_summary["Avg Secondary Swell"] = (
-    daily_summary["Secondary Swell Size (ft)_mean"].round(0).astype(int).astype(str)
+    daily_summary["Secondary Swell Size (ft)_mean"]
+    .fillna(0)
+    .round(0)
+    .astype(int)
+    .astype(str)
     + "ft @ "
-    + daily_summary["Secondary Swell Period_mean"].round(0).astype(int).astype(str)
+    + daily_summary["Secondary Swell Period_mean"]
+    .fillna(0)
+    .round(0)
+    .astype(int)
+    .astype(str)
     + "s "
-    + daily_summary["Secondary Swell Direction_mean"].apply(categorize_bolinas_swell)
+    + daily_summary["Secondary Swell Direction_mean"]
+    .fillna(0)
+    .apply(categorize_bolinas_swell)
 )
 
 daily_summary["Wind Range"] = (
-    daily_summary["Wind Speed (MPH)_min"].round(0).astype(str)
+    daily_summary["Wind Speed (MPH)_min"].fillna(0).round(0).astype(str)
     + " - "
-    + daily_summary["Wind Speed (MPH)_max"].round(0).astype(str)
+    + daily_summary["Wind Speed (MPH)_max"].fillna(0).round(0).astype(str)
     + " MPH"
 )
 
@@ -381,7 +432,7 @@ display_df.columns = [
 ]
 
 st.dataframe(
-    display_df.style.applymap(style_surf_score, subset=["Max Surf Score"]),
+    display_df.style.map(style_surf_score, subset=["Max Surf Score"]),
     use_container_width=True,
 )
 
@@ -406,10 +457,8 @@ selected_time = st.selectbox(
     format_func=lambda t: t.strftime("%b %d, %I:%M %p"),
 )
 
-# 1. Row selection
-row = forecast_df.loc[forecast_df["datetime"] == selected_time].iloc[0]
-
-row = forecast_df.loc[forecast_df["datetime"] == selected_time].iloc[0]
+# Row selection
+time_row = forecast_df.loc[forecast_df["datetime"] == selected_time].iloc[0]
 
 with st.container(border=True):
     col1, col2, col3, col4 = st.columns(4)
@@ -433,47 +482,54 @@ with st.container(border=True):
 
     # Column 1: Overall
     breakdown_item(
-        col1, row["Surf Score (1-10)"], "Overall Grade", f"{row['Surf (ft)']} ft"
+        col1,
+        time_row["Surf Score (1-10)"],
+        "Overall Grade",
+        f"{time_row['Surf (ft)']} ft",
     )
 
     # Column 2: Swell (using is_multi for the secondary swell styling)
-    swell_html = f"**Dom:** {row['Dominant']}<br><span style='font-size:0.8rem; color:grey;'>**Sec:** {row['Secondary']}</span>"
+    swell_html = f"**Dom:** {time_row['Dominant']}<br><span style='font-size:0.8rem; color:grey;'>**Sec:** {time_row['Secondary']}</span>"
     breakdown_item(
         col2,
-        row["Dominant Swell Score (1-10)"],
+        time_row["Dominant Swell Score (1-10)"],
         "Swell Quality",
         swell_html,
         is_multi=True,
     )
 
     # Column 3: Wind
-    breakdown_item(col3, row["Wind Score (1-10)"], "Wind Quality", row["Wind"])
+    breakdown_item(
+        col3, time_row["Wind Score (1-10)"], "Wind Quality", time_row["Wind"]
+    )
 
     # Column 4: Tide
     breakdown_item(
-        col4, row["Tide Score (1-10)"], "Tide Quality", f"{row['Tide (ft)']}"
+        col4, time_row["Tide Score (1-10)"], "Tide Quality", f"{time_row['Tide (ft)']}"
     )
 
-# 4. Pro-Tip: Add a "Why this score?" helper text
+# Add a "Why this score?" helper text
 with st.expander("How are these scores calculated?"):
-    # 1. Dynamically build the Swell help text from config
+    # Dynamically build the Swell help text from config
     # This loops through west_range, nw_range, south_sweet_spot, etc.
     swell_notes = []
-    for key, value in prop_cfg["ui_ranges"].items():
-        if isinstance(value, list) and len(value) == 2:
+    for key, ui_range in surf_cfg["ui_ranges"].items():
+        if isinstance(ui_range, list) and len(ui_range) == 2:
             # Format name: "west_range" -> "West Range"
             range_name = key.replace("_", " ").title()
-            swell_notes.append(f"{range_name} ({value[0]}°-{value[1]}°)")
+            swell_notes.append(f"{range_name} ({ui_range[0]}°-{ui_range[1]}°)")
 
     swell_help = " • ".join(swell_notes)
 
-    # 2. Render the Markdown
-    st.write(f"""
+    # Render the Markdown
+    st.write(
+        f"""
     - **Swell:** Optimized for propagation from:  
       {swell_help}
     - **Wind:** Optimized for offshore flow relative to the coast orientation of **{config["data_sources"]["coast_orientation"]}°**.
-    - **Tide:** The "Tide Score" is highest when the height is between **{config["surf_model"]["tide"]["optimal_low"]}ft** and **{config["surf_model"]["tide"]["optimal_high"]}ft**.
-    """)
+    - **Tide:** The "Tide Score" is highest when the height is between **-1 and 3 ft**.
+    """
+    )
 
 # =======================================================================================
 # TIME SERIES EXPLORER
@@ -484,19 +540,19 @@ st.subheader("📈 Time Series Explorer")
 # TIME SERIES UTILITIES
 
 
-def build_night_rects(df):
+def build_night_rects(light_df):
     """
     Build Altair rectangle blocks for nighttime using is_daylight == False.
     Daytime remains unshaded for clarity.
     """
-    if "is_daylight" not in df.columns:
+    if "is_daylight" not in light_df.columns:
         return pd.DataFrame(columns=["start", "end"])
 
     rects = []
     in_block = False
     start_time = None
 
-    for _, row in df.iterrows():
+    for _, row in light_df.iterrows():
         if not row["is_daylight"] and not in_block:
             in_block = True
             start_time = row["datetime"]
@@ -507,14 +563,14 @@ def build_night_rects(df):
 
     # If ending at night
     if in_block:
-        rects.append({"start": start_time, "end": df["datetime"].iloc[-1]})
+        rects.append({"start": start_time, "end": light_df["datetime"].iloc[-1]})
 
     return pd.DataFrame(rects)
 
 
-def add_daylight_shading(line_chart, df):
+def add_daylight_shading(line_chart, light_df):
     """Overlay darker shading for nighttime blocks."""
-    rect_df = build_night_rects(df)
+    rect_df = build_night_rects(light_df)
 
     if rect_df.empty:
         return line_chart
@@ -531,9 +587,8 @@ def add_daylight_shading(line_chart, df):
     return rect + line_chart
 
 
-def alt_chart(df, y_col, y_title, domain=None, color="steelblue"):
+def alt_chart(chart_df, y_col, y_title, domain=None, color="steelblue"):
     """Unified line chart with visible night shading."""
-    # base = df.reset_index(names="datetime")
 
     y_enc = alt.Y(
         f"{y_col}:Q",
@@ -542,7 +597,7 @@ def alt_chart(df, y_col, y_title, domain=None, color="steelblue"):
     )
 
     line = (
-        alt.Chart(df)
+        alt.Chart(chart_df)
         .mark_line(color=color)
         .encode(
             x=alt.X("datetime:T", title="Date/Time"),
@@ -555,25 +610,24 @@ def alt_chart(df, y_col, y_title, domain=None, color="steelblue"):
         .properties(height=220)
     )
 
-    return add_daylight_shading(line, df)
+    return add_daylight_shading(line, chart_df)
 
 
-def alt_wind_with_gusts(df):
+def alt_wind_with_gusts(wind_df):
     """
     Wind chart with sustained wind + gust overlay.
     """
-    # base = df.reset_index(names="datetime")
 
     # Sustained wind
     wind_line = (
-        alt.Chart(df)
+        alt.Chart(wind_df)
         .mark_line(color="green")
         .encode(
             x=alt.X("datetime:T", title="Date/Time"),
             y=alt.Y(
                 "Wind Speed (MPH):Q",
                 title="Wind Speed (mph)",
-                scale=alt.Scale(domain=[0, 30]),
+                scale=alt.Scale(domain=[0, 40]),
             ),
             tooltip=[
                 alt.Tooltip("datetime:T", title="Time"),
@@ -586,7 +640,7 @@ def alt_wind_with_gusts(df):
 
     # Gusts (dashed)
     gust_line = (
-        alt.Chart(df)
+        alt.Chart(wind_df)
         .mark_line(color="darkgreen", strokeDash=[4, 4], opacity=0.7)
         .encode(
             x="datetime:T",
@@ -599,7 +653,7 @@ def alt_wind_with_gusts(df):
 
     chart = (wind_line + gust_line).properties(height=220)
 
-    return add_daylight_shading(chart, df)
+    return add_daylight_shading(chart, wind_df)
 
 
 # Important: ALWAYS use unfiltered forecast_df for shading accuracy
@@ -618,7 +672,7 @@ with tab1:
 with tab2:
     st.altair_chart(
         alt_chart(
-            unfiltered, "Surf Height Max (ft)", "Surf Height (ft)", domain=[0, 6]
+            unfiltered, "Surf Height Max (ft)", "Surf Height (ft)", domain=[0, 8]
         ),
         use_container_width=True,
     )
@@ -657,3 +711,57 @@ st.download_button(
     file_name="bolinas_surf_forecast.csv",
     mime="text/csv",
 )
+
+st.subheader("Report Live Conditions")
+st.info("Your feedback helps tune the Bolinas Surf Forecast.")
+
+with st.form("surf_report_form", clear_on_submit=True):
+    col1, col2 = st.columns(2)
+
+    with col1:
+        observed_min = st.number_input(
+            "Observed Min Height (ft)",
+            min_value=0.0,
+            max_value=20.0,
+            value=2.0,
+            step=0.5,
+        )
+    with col2:
+        observed_max = st.number_input(
+            "Observed Max Height (ft)",
+            min_value=0.0,
+            max_value=20.0,
+            value=3.0,
+            step=0.5,
+        )
+
+    user_score = st.select_slider(
+        "Overall Session Score (1-10)",
+        options=range(1, 11),
+        value=5,
+        help="How good was the actual surf quality?",
+    )
+
+    comments = st.text_area(
+        "Freeform Feedback",
+        placeholder="e.g. 'Closing out on the sets' or 'Wind stayed offshore longer than predicted'",
+    )
+
+    submitted = st.form_submit_button("Submit Report")
+
+    if submitted:
+        new_entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "obs_min": observed_min,
+            "obs_max": observed_max,
+            "user_score": user_score,
+            "comments": comments.replace(",", ";"),
+        }
+
+        df = pd.DataFrame([new_entry])
+
+        # Append to the file in the ../data/ folder
+        file_exists = os.path.isfile(FEEDBACK_FILE)
+        df.to_csv(FEEDBACK_FILE, mode="a", index=False, header=not file_exists)
+
+        st.success("Thank you for your feedback!")

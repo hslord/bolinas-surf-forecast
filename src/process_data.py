@@ -1,13 +1,8 @@
 # IMPORTS
-import requests
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-import xarray as xr
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LinearRegression
-import yaml
 from reference_functions import status
+from zoneinfo import ZoneInfo
 
 pacific = ZoneInfo("America/Los_Angeles")
 
@@ -54,598 +49,485 @@ def classify_wind_relative_to_coast(
         return "crosshore"
 
 
-def expand_ww3_for_surf_model(df_ww3):
+def expand_timeseries_data(df: pd.DataFrame, freq="h", limit=6):
     """
-    Process WW3 for surf modeling in the following ways:
-    - Expand 3-hourly WW3 partitioned swell data to hourly resolution
-    using physical interpolation
-    - Add a height in ft column
+    Expand and interpolate wave or wind timeseries data to a higher frequency
+    using circular math for directions and linear math for magnitudes.
 
     Parameters
     ----------
-    df_ww3 : pandas.DataFrame
-        Partitioned WW3 output indexed by time (3-hourly),
-        with columns including:
-        - swell_idx
-        - Hs_m
-        - Tp_s
-        - Dir_deg
+    df : pandas.DataFrame
+        The input dataframe indexed by datetime. Supports both 'flat' data
+        (like wind/MOP) and 'partitioned' data containing a 'swell_idx' column.
+    freq : str, optional
+        The pandas frequency string for the new index (e.g., 'h' for hourly,
+        '15min' for 15-minute intervals). Default is 'h'.
+    limit : int, optional
+        Maximum number of consecutive NaNs to fill. Gaps larger than this
+        threshold will remain as NaNs to avoid over-interpolation. Default is 6.
 
     Returns
     -------
     pandas.DataFrame
-        Hourly WW3 dataframe with the same columns and partition structure.
+        The expanded dataframe with a uniform time index. Directional columns
+        are interpolated via vector components (sin/cos) to handle 0/360 crossovers,
+        while numeric magnitudes are interpolated linearly.
     """
-    # return hourly
-    if not isinstance(df_ww3.index, pd.DatetimeIndex):
-        raise ValueError("df_ww3 must be indexed by time")
+    if df is None or df.empty:
+        return pd.DataFrame()
 
-    full_index = pd.date_range(
-        start=df_ww3.index.min(), end=df_ww3.index.max(), freq="h"
-    )
+    # Setup Index
+    full_index = pd.date_range(start=df.index.min(), end=df.index.max(), freq=freq)
+    full_index.name = "time"
 
-    def _interp_partition(g):
-        g = g.reindex(full_index)
+    # Handle Partitioning (Swell 1, 2, 3) vs Flat Data
+    if "swell_idx" in df.columns:
+        expanded = df.groupby("swell_idx", group_keys=False).apply(
+            lambda g: g.reindex(full_index), include_groups=False
+        )
+    else:
+        expanded = df.reindex(full_index)
 
-        # Linear interpolation for scalar quantities
-        for col in ["Hs_m", "Tp_s"]:
-            if col in g:
-                g[col] = g[col].interpolate(limit_direction="both")
+    # Categorize Columns (Added 'wind' keywords)
+    dir_keywords = ["dir", "dp", "deg", "direction"]
 
-        # Circular interpolation for direction
-        if "Dir_deg" in g:
-            rad = np.deg2rad(g["Dir_deg"])
-            g["_sin"] = np.sin(rad)
-            g["_cos"] = np.cos(rad)
+    dir_cols = [
+        c
+        for c in expanded.columns
+        if any(key in c.lower() for key in dir_keywords) and not c.startswith("_")
+    ]
 
-            g["_sin"] = g["_sin"].interpolate(limit_direction="both")
-            g["_cos"] = g["_cos"].interpolate(limit_direction="both")
+    linear_cols = [
+        c
+        for c in expanded.select_dtypes(include=[np.number]).columns
+        if c not in dir_cols and c != "swell_idx"
+    ]
 
-            g["Dir_deg"] = (np.rad2deg(np.arctan2(g["_sin"], g["_cos"])) + 360) % 360
-            g = g.drop(columns=["_sin", "_cos"])
-
-        return g
-
-    hourly = df_ww3.groupby("swell_idx", group_keys=False).apply(_interp_partition)
-
-    hourly.index.name = "time"
-    hourly["Hs_ft"] = hourly["Hs_m"] * 3.28084
-
-    return hourly
-
-
-def expand_wind_to_hourly(df_wind: pd.DataFrame):
-    """
-    Expand NWS gridpoint wind forecast to hourly resolution
-    using stepwise hold (forward fill).
-
-    Parameters
-    ----------
-    df_wind : pandas.DataFrame
-        Wind forecast indexed by datetime, containing:
-        - wind_speed
-        - wind_gust
-        - wind_direction
-
-    Returns
-    -------
-    pandas.DataFrame
-        Hourly wind forecast.
-    """
-    if not isinstance(df_wind.index, pd.DatetimeIndex):
-        raise ValueError("df_wind must be indexed by datetime")
-
-    full_index = pd.date_range(
-        start=df_wind.index.min(), end=df_wind.index.max(), freq="h"
-    )
-
-    # 1. Reindex
-    hourly = df_wind.reindex(full_index)
-
-    # 2. Interpolate Speeds (Linear)
-    hourly[["wind_speed", "wind_gust"]] = hourly[
-        ["wind_speed", "wind_gust"]
-    ].interpolate(method="linear")
-
-    # 3. Forward Fill Direction (Avoids the 350 -> 10 deg South flip)
-    hourly["wind_direction"] = hourly["wind_direction"].ffill()
-
-    hourly.index.name = "time"
-    return hourly
-
-
-def bolinas_wave_propagation(
-    direction_deg: float, period_sec: float, height_ft: float, propagation_cfg: dict
-):
-    """
-    Purpose
-    -------
-    Compute the Bolinas blended directional propagation factor for a single offshore
-    swell, based on coastline geometry weighting three directional windows
-    (South, West, NW) using logistic smoothing.
-
-    Parameters
-    ----------
-    direction_deg : float
-        Offshore swell direction (degrees).
-    period_sec : float
-        Peak period (seconds).
-    height_ft : float
-        Offshore significant wave height (feet).
-    propagation_cfg : dict
-        Configuration dictionary under `surf_model.propagation`
-        containing all directional and wrap parameters.
-
-    Returns
-    -------
-    float
-        Propagation factor in the range [0, 1].
-    """
-    def calculate_window_weight(angle, center, width, steepness):
-        # The 'Weight' of this window based on swell direction
-        # Result is 1.0 inside the core and tapers to 0.0 outside
-        return 1.0 / (1.0 + np.exp(steepness * (abs(angle - center) - width)))
-
-    def calculate_performance_factor(mid_val, k_val, current_val):
-        # Reusable logistic curve 
-        return 1.0 / (1.0 + np.exp(-(current_val - mid_val) * k_val))
-
-    # 1. CALCULATE WEIGHTS 
-    weights = {}
-    for window in ["south_sweet_spot", "west_wrap", "nw_reef_gate"]:
-        cfg = propagation_cfg[window]
-        weights[window] = calculate_window_weight(
-            direction_deg, cfg["center"], cfg["width"], cfg["steepness"]
+    # Apply Linear Interpolation (Speeds, Heights, Periods)
+    if linear_cols:
+        expanded[linear_cols] = expanded[linear_cols].interpolate(
+            method="linear", limit=limit, limit_direction="both"
         )
 
-    # 2. CALCULATE WINDOW-SPECIFIC SCORES
-    # South Logic: full swell
-    score_south = 1.0 
+    # Apply Circular Interpolation (Wave & Wind Directions)
+    for col in dir_cols:
+        if expanded[col].isna().all():
+            continue
 
-    # West Logic: Highly dependent on period/height to wrap onto the reef
-    west_wrap_factor = calculate_performance_factor(
-        propagation_cfg["west_period_mid"], propagation_cfg["west_period_k"], period_sec
-    )
-    west_size_factor = calculate_performance_factor(
-        propagation_cfg["west_height_mid"], propagation_cfg["west_height_k"], height_ft
-    )
-    score_west = propagation_cfg["west_base"] + (
-        propagation_cfg["west_bonus"] * west_wrap_factor * west_size_factor
+        rad = np.deg2rad(expanded[col])
+        # Interpolate the vector components separately
+        s_sin = np.sin(rad).interpolate(
+            method="linear", limit=limit, limit_direction="both"
+        )
+        s_cos = np.cos(rad).interpolate(
+            method="linear", limit=limit, limit_direction="both"
+        )
+
+        # Reconstruct the angle
+        expanded[col] = (np.rad2deg(np.arctan2(s_sin, s_cos)) + 360) % 360
+
+    return expanded
+
+
+def compute_swell_score(ds_swell, surf_model):
+    """
+    Compute a 1-10 swell quality score for each timestep in a swell-filtered
+    MOP dataset based on wave energy density and spectral parameters.
+
+    The score evaluates how clean and powerful the swell will by combining
+    significant wave height (Hs), peak period (Tp), and directional spread.
+    It applies non-linear square-root ramps to prioritize long-period
+    groundswells and penalize disorganized spectral spread.
+
+    Parameters
+    ----------
+    ds_swell : xarray.Dataset
+        CDIP MOP dataset pre-filtered to the swell frequency band.
+        Must contain variables:
+        - waveEnergyDensity
+        - waveA1Value / waveB1Value (for directional spread)
+        - waveBandwidth
+        - waveDp
+        - waveTime
+    surf_model: config with spectral parameters
+
+    Returns
+    -------
+    pandas.DataFrame
+        Time-indexed DataFrame containing:
+        - hs_swell : Significant swell height (meters)
+        - tp : Peak wave period (seconds)
+        - dp : Peak wave direction (degrees)
+        - spread : Directional spread (degrees)
+        - r1 : First directional moment (unitless)
+        - hs_score : Normalized height component [0, 1]
+        - tp_score : Normalized period component [0, 1]
+        - spread_score : Normalized spread component [0, 1]
+        - swell_score : Final composite score [1, 10]
+    """
+    # Spectral peak info per timestep
+    peak_idx = ds_swell.waveEnergyDensity.argmax(dim="waveFrequency")
+    a1_peak = ds_swell.waveA1Value.isel(waveFrequency=peak_idx)
+    b1_peak = ds_swell.waveB1Value.isel(waveFrequency=peak_idx)
+    freq_peak = ds_swell.waveFrequency.isel(waveFrequency=peak_idx)
+    r1 = np.sqrt(a1_peak**2 + b1_peak**2)
+    spread_deg = np.degrees(np.sqrt(2 * (1 - r1)))
+
+    # Swell Hs
+    bw = ds_swell.waveBandwidth
+    m0 = (ds_swell.waveEnergyDensity * bw).sum(dim="waveFrequency")
+    hs_swell = 4 * np.sqrt(m0)
+
+    # config
+    spectral_cfg = surf_model["spectral_scoring"]
+
+    # Validate that scoring weights sum to ~1.0
+    weight_sum = spectral_cfg["w_hs"] + spectral_cfg["w_tp"] + spectral_cfg["w_sp"]
+    if not np.isclose(weight_sum, 1.0, atol=0.01):
+        raise ValueError(
+            f"Spectral scoring weights must sum to 1.0, got {weight_sum:.3f}"
+        )
+
+    # sqrt curve: ramp up
+    hs_range = spectral_cfg["hs_full_credit_m"] - spectral_cfg["hs_min_m"]
+    hs_score = np.sqrt(np.clip((hs_swell - spectral_cfg["hs_min_m"]) / hs_range, 0, 1))
+
+    # Peak period
+    tp = 1.0 / freq_peak
+    tp_range = spectral_cfg["tp_full_credit_s"] - spectral_cfg["tp_min_s"]
+    tp_score = np.sqrt(np.clip((tp - spectral_cfg["tp_min_s"]) / tp_range, 0, 1))
+
+    # Spread at peak frequency
+    spread_range = spectral_cfg["spread_max_deg"] - spectral_cfg["spread_min_deg"]
+    spread_score = np.clip(
+        1 - (spread_deg - spectral_cfg["spread_min_deg"]) / spread_range, 0, 1
     )
 
-    # NW Logic: The Gate requires even more energy to wrap around Duxbury
-    nw_wrap_factor = calculate_performance_factor(
-        propagation_cfg["nw_period_mid"], propagation_cfg["nw_period_k"], period_sec
+    # Composite: scale 0-1 to 1-10
+    raw = (
+        (hs_score * spectral_cfg["w_hs"])
+        + (tp_score * spectral_cfg["w_tp"])
+        + (spread_score * spectral_cfg["w_sp"])
     )
-    nw_size_factor = calculate_performance_factor(
-        propagation_cfg["nw_height_mid"], propagation_cfg["nw_height_k"], height_ft
+    score = 1 + raw * 9
+
+    return pd.DataFrame(
+        {
+            "hs_swell": hs_swell.values,
+            "tp": tp.values,
+            "dp": ds_swell.waveDp.values,
+            "spread": spread_deg.values,
+            "r1": r1.values,
+            "hs_score": hs_score.values,
+            "tp_score": tp_score.values,
+            "spread_score": spread_score.values,
+            "swell_score": score.values,
+        },
+        index=pd.DatetimeIndex(ds_swell.waveTime.values, name="time"),
     )
-    score_nw = propagation_cfg["nw_base"] + (
-        propagation_cfg["nw_bonus"] * nw_wrap_factor * nw_size_factor
-    )
-
-    # 3. COMPUTE WEIGHTED AVERAGE
-    # This prevents the score jump by blending scores based on directional overlap
-    total_weight = sum(weights.values())
-    
-    if total_weight < 0.01:
-        return propagation_cfg["blocked_value"]
-
-    final_score = (
-        (score_south * weights["south_sweet_spot"]) +
-        (score_west * weights["west_wrap"]) +
-        (score_nw * weights["nw_reef_gate"])
-    ) / total_weight
-
-    return max(propagation_cfg["blocked_value"], final_score)
 
 
 def predict_bolinas_surf_height(
     height_ft: float,
     period_s: float,
-    direction_deg: float,
     nearshore_cfg: dict,
-    propagation_cfg: dict,
 ):
     """
-    Purpose
-    -------
-    Estimate nearshore surf height range at Bolinas for a single offshore swell,
-    combining directional propagation (wrap/blocking) with nearshore shoaling
-    and a configurable variability range.
+    Estimate the nearshore surf height range at Bolinas using MOP-derived
+    nearshore swell height. Applies a dynamic variability range based
+    on wave period to account for set consistency and shoaling.
 
     Parameters
     ----------
     height_ft : float
-        Offshore significant wave height (ft).
+        Nearshore significant wave height (ft) from CDIP MOP.
     period_s : float
         Peak swell period (s).
-    direction_deg : float
-        Swell direction (degrees, oceanographic).
     nearshore_cfg : dict
         Configuration block: surf_model.nearshore
         Keys:
-            base_factor
-            min_direction_factor
-            range_factor
-    propagation_cfg : dict
-        Configuration block: surf_model.propagation
+            range_factor : float (base % variability)
+            range_period_min : float (period threshold for increasing range)
+            range_step : float (% increase in range per second of period)
 
     Returns
     -------
     dict
         {
             "bolinas_surf_min_ft": float,
-            "bolinas_surf_max_ft": float,
-            "swell_propagation": float in [0,1] or None
+            "bolinas_surf_max_ft": float
         }
     """
-
-    # missing inputs → zero
-    if pd.isna(height_ft) or pd.isna(period_s) or pd.isna(direction_deg):
+    # Missing inputs or flat ocean → zero
+    if pd.isna(height_ft) or pd.isna(period_s) or height_ft <= 0:
         return {
             "bolinas_surf_min_ft": 0.0,
             "bolinas_surf_max_ft": 0.0,
-            "swell_propagation": None,
         }
 
-    # 1) directional attenuation
-    propagation_factor = bolinas_wave_propagation(
-        direction_deg=direction_deg,
-        period_sec=period_s,
-        height_ft=height_ft,
-        propagation_cfg=propagation_cfg,
-    )
-
-    # 2) nearshore shoaling (dampen extreme blocked dirs)
-    transfer = nearshore_cfg["base_factor"] * np.clip(
-        propagation_factor, propagation_cfg["blocked_value"], 1.0
-    )
-
-    # raw nearshore height (ft)
-    bolinas_height = max(0.0, height_ft * transfer)
-
-    # 3) variability range
-    rf = nearshore_cfg["range_factor"]
-
-    # Increase the range by X% for every second of period over Ys
-    dynamic_rf = rf + (
+    # Increase the range by X% for every second of period over Ys (e.g., 12s)
+    dynamic_rf = nearshore_cfg["range_factor"] + (
         max(0, period_s - nearshore_cfg["range_period_min"])
         * nearshore_cfg["range_step"]
     )
 
-    # Apply to height
-    h_min = bolinas_height * (1 - dynamic_rf)
-    h_max = bolinas_height * (1 + dynamic_rf)
+    # Apply to height-MOP height as the median expectation
+    h_min = height_ft * (1 - dynamic_rf)
+    h_max = height_ft * (1 + dynamic_rf)
 
-    # round to nearest 0.5'
+    # Clean up for readability
     to_half = lambda x: round(x * 2) / 2
-    h_min = to_half(max(0.5, h_min))
-    h_max = to_half(max(h_min, h_max))  # enforce ordering
+
+    # Enforce a minimum floor of 0.5ft for any active swell
+    h_min_final = to_half(max(0.5, h_min))
+    h_max_final = to_half(max(h_min_final, h_max))
 
     return {
-        "bolinas_surf_min_ft": h_min,
-        "bolinas_surf_max_ft": h_max,
-        "swell_propagation": round(propagation_factor, 3),
+        "bolinas_surf_min_ft": h_min_final,
+        "bolinas_surf_max_ft": h_max_final,
     }
 
 
 def calculate_surf_score(
-    period_s: float,
+    swell_score: float,
     wind_speed: float,
     wind_gust: float,
     wind_category: str,
     tide_height: float,
-    bolinas_surf_min_ft: float,
-    bolinas_surf_max_ft: float,
-    swell_propagation: float,
-    coast_orientation: float,
     surf_model: dict,
 ):
     """
-    Purpose
-        Compute a 0-10 surf quality score for Bolinas for a single WW3 swell
-        component, incorporating swell energy, coastal exposure, wind,
-        and tide alignment using model parameters defined in the config.
+    Compute a 1-10 final surf quality score using parameterized wind and tide
+    penalties. Logic is multiplicative: Final = Swell * Wind_P * Tide_P.
 
     Parameters
-        period_s (float): Swell period (seconds)
-        wind_speed (float): Wind speed in mph
-        wind_gust (float): Wind gusts in mph
-        wind_category: Wind direction as categorical string - offshore, onshore, crosshore
-        tide_height (float): Tide height in ft MLLW
-        bolinas_surf_min_ft (float): Predicted min surf height from predict_bolinas_surf_height()
-        bolinas_surf_max_ft (float): Predicted max surf height from predict_bolinas_surf_height()
-        swell_propagation (float): Predicted propagation fafctor from bolinas_wave_propagation()
-        coast_orientation (float): Local coastline orientation (degrees)
-        surf_model (dict): Full surf_model config block
+    ----------
+    swell_score : float
+        The 1-10 quality score from compute_swell_score().
+    wind_speed : float
+        Wind speed in mph.
+    wind_gust : float
+        Wind gust in mph.
+    wind_category : str
+        'offshore', 'crosshore', or 'onshore'.
+    tide_height : float
+        Tide height in feet (MLLW).
+    surf_model : dict
+        The 'surf_model' block from your config.
 
     Returns
-        float: Final surf score 0-10 (rounded to 0.1)
+    -------
+    tuple
+        (final_score, swell_score, wind_score, tide_score)
     """
-    # 1. SWELL SCORE — Bolinas-first
-    if pd.isna(bolinas_surf_min_ft) or pd.isna(period_s):
-        swell_score = 0.0
-        energy = 0.0
-    elif swell_propagation <= 0.05:
-        # Hard block: swell does not meaningfully reach Bolinas
-        swell_score = 0.05
-        energy = 0.05
-    else:
-        # Period multiplier (quality only)
-        pm = surf_model["period_multiplier"]
-        period_mult = pm["min"] + (pm["max"] - pm["min"]) / (
-            1 + np.exp(-pm["steepness"] * (period_s - pm["midpoint"]))
-        )
+    # WIND COMPONENT
+    w_cfg = surf_model["wind"]
 
-        # Nearshore height proxy
-        nearshore_h = 0.5 * (bolinas_surf_min_ft + bolinas_surf_max_ft)
-
-        # Energy = height only
-        eg = surf_model["energy"]
-        energy = nearshore_h ** eg["height_exp"]
-
-        # Propagation as gate
-        swell_raw = energy * period_mult
-
-        swell_score = 10 * (
-            1 - np.exp(-eg["energy_k"] * eg["swell_saturation"] * swell_raw)
-        )
-
-    # 2. WIND SCORE
-    wind_cfg = surf_model["wind"]
-
+    # Map the category to the penalty weights in the config
+    w_dir_map = {
+        "offshore": w_cfg["offshore_penalty_weight"],
+        "crosshore": w_cfg["crosshore_penalty_weight"],
+        "onshore": w_cfg["onshore_penalty_weight"],
+    }
+    # don't penalize scores if wind is null
     if pd.isna(wind_speed) or pd.isna(wind_category):
-        wind_score = 5.0
+        wind_score = np.nan
+        w_penalty = 1.0
     else:
-        # Global speed penalty using logistic decay
-        s_mid = wind_cfg["speed_midpoint"]
-        s_k = wind_cfg["speed_k"]
-        speed_factor = 1 / (1 + np.exp(s_k * (wind_speed - s_mid)))
+        w_dir = w_dir_map.get(wind_category, 1.0)  # Default to onshore if error
 
-        # Directional Weighting
-        raw_weight = wind_cfg[f"{wind_category}_weight"]
+        # Calculate gust factor (weighted average)
+        gust_weight = w_cfg["gust_weight"]
+        adjusted_speed = (wind_speed * (1 - gust_weight)) + (wind_gust * gust_weight)
 
-        # Light Wind Blend
-        blend = np.clip(wind_speed / wind_cfg["glassy_cutoff"], 0, 1)
-        final_weight = 1.0 - (blend * (1.0 - raw_weight))
+        # Calculate penalty: (Effective Speed - Floor) / Range
+        effective_speed = adjusted_speed * w_dir
+        w_penalty = np.clip(
+            1 - (effective_speed - w_cfg["speed_floor"]) / w_cfg["speed_range"],
+            w_cfg["penalty_min"],
+            1.0,
+        )
+        wind_score = w_penalty * 10.0
 
-        # Final Wind Score
-        wind_score = 10.0 * speed_factor * final_weight
+    # TIDE COMPONENT
+    t_cfg = surf_model["tide"]
 
-    # 3. TIDE SCORE (shape: 10 at center, ~edge_score at bounds, fast drop outside)
+    # don't penalize scores if tide  is null
     if pd.isna(tide_height):
-        tide_score = 5.0
+        tide_score = np.nan
+        t_penalty = 1.0
+
     else:
-        td = surf_model["tide"]
+        # Gaussian Falloff: exp(-0.5 * ((current - optimal) / sigma)^2)
+        t_penalty = np.clip(
+            np.exp(
+                -0.5 * ((tide_height - t_cfg["optimal_height"]) / t_cfg["sigma"]) ** 2
+            ),
+            t_cfg["penalty_min"],
+            1.0,
+        )
+        tide_score = t_penalty * 10.0
 
-        center = 0.5 * (td["optimal_low"] + td["optimal_high"])
-        half_width = 0.5 * (td["optimal_high"] - td["optimal_low"])
+    # FINAL SCORE
+    f_cfg = surf_model["final_scoring"]
 
-        # normalized distance from center: 0 at center, 1 at edges
-        x = abs(tide_height - center) / half_width
-
-        if x <= 1.0:
-            # Inside window: smooth dome from 10 (center) down to edge_score at edges
-            # Using a quadratic drop: 10 - (10-edge_score)*x^2
-            tide_score = 10.0 - (10.0 - td["edge_score"]) * (x**2)
-        else:
-            # Outside window: decay quickly from edge_score
-            # (x-1) is distance beyond edge in "half-width" units
-            tide_score = td["edge_score"] * np.exp(-td["outside_decay"] * (x - 1.0))
-
-        tide_score = float(np.clip(tide_score, 0.0, 10.0))
-
-    # 4. FINAL SCORE
-    w = surf_model["weights"]
-
-    # Dampen the tide's influence on small/poor swells while ensuring
-    # it maintains a X% minimum impact for tide-sensitive breaks.
-    tide_weight_factor = np.clip(
-        (swell_score + w["tide_swell_offset"]) / 10.0, w["tide_min_influence"], 1.0
+    # Calculate individual potential reductions
+    w_red = (
+        (1.0 - w_penalty) * f_cfg["wind_impact_weight"]
+        if wind_score < swell_score
+        else 0
+    )
+    t_red = (
+        (1.0 - t_penalty) * f_cfg["tide_impact_weight"]
+        if tide_score < swell_score
+        else 0
     )
 
-    # Wind only contributes to the score if there is actual swell energy.
-    wind_weight_factor = np.clip(swell_score / w["wind_swell_threshold"], 0.0, 1.0)
+    # Use 100% of the worse penalty + x% of the lesser penalty
+    primary_red = max(w_red, t_red)
+    secondary_red = min(w_red, t_red)
 
-    # Put all components together
-    final_score = (
-        swell_score * w["swell"]
-        + wind_score * w["wind"] * wind_weight_factor
-        + tide_score * w["tide"] * tide_weight_factor
-        + w["baseline"] * 0.1
+    combined_reduction = primary_red + (secondary_red * f_cfg["secondary_penalty"])
+
+    final_multiplier = max(f_cfg["min_multiplier"], 1.0 - combined_reduction)
+
+    raw_final = swell_score * final_multiplier
+
+    # But final_score cannot be less than the lowest of any individual score
+    lowest_individual_score = min(
+        s for s in (swell_score, wind_score, tide_score) if not pd.isna(s)
     )
+    final_score = max(raw_final, lowest_individual_score)
 
     return (
-        round(final_score, 1),
-        round(swell_score, 1),
-        round(wind_score, 1),
-        round(tide_score, 1),
+        round(float(final_score), 1),
+        round(float(swell_score), 1),
+        round(float(wind_score), 1),
+        round(float(tide_score), 1),
     )
-
-
-def compute_partition_energy(
-    bolinas_surf_min_ft: float,
-    bolinas_surf_max_ft: float,
-    Tp_s: float,
-    energy_cfg: dict,
-):
-    """
-    Nearshore energy proxy used for partition weighting.
-    """
-    h = 0.5 * (bolinas_surf_min_ft + bolinas_surf_max_ft)
-
-    if h <= 0 or Tp_s <= 0:
-        return 0.0
-
-    return (h ** energy_cfg["height_exp"]) * (Tp_s ** energy_cfg["period_exp"])
 
 
 def aggregate_hourly_partitions(group: pd.DataFrame):
     """
-    Aggregate partition-level surf metrics into a single hourly row,
-    retaining dominant and secondary swell diagnostics.
+    Identify and rank the dominant and secondary raw ocean swells from
+    WW3 partitions for UI visualization.
 
-    GUARANTEE:
-        All returned values are scalars (float / int / np.nan).
+    This function processes a group of wave partitions (typically for a single
+    hour) and ranks them by Wave Power to ensure that
+    energetic long-period groundswells are prioritized over short-period
+    wind chop, even if the latter has a slightly higher significant height.
+
+    Parameters
+    ----------
+    group : pandas.DataFrame
+        A dataframe slice containing partitioned swell data for a specific
+        timestamp. Expected columns include 'Hs_ft', 'Tp_s', 'Dir_deg',
+        and environmental context like 'wind_speed' and 'tide_height'.
+
+    Returns
+    -------
+    pandas.Series
+        A flattened record containing environmental metadata and the
+        diagnostics for both the 'dominant' and 'secondary' swells.
+        Includes calculated 'power_idx' for both partitions to assist
+        in UI ranking and visualization.
     """
 
     def _scalar(x):
-        """
-        Force scalar extraction.
-        Fails loudly if something unexpected slips through.
-        """
-        if isinstance(x, pd.Series):
-            if len(x) == 0:
-                return np.nan
-            return x.iloc[0]
-        if isinstance(x, np.ndarray):
-            if x.ndim == 0:
-                return x.item()
-            if x.size == 1:
-                return x.flat[0]
-            raise ValueError(f"Non-scalar ndarray: shape={x.shape}")
-        return x
+        return x.iloc[0] if isinstance(x, (pd.Series, np.ndarray)) else x
 
-    energy = group["partition_energy"]
+    # Handle Empty Data
+    if len(group) == 0:
+        return pd.Series({"dominant_Hs_ft": np.nan, "secondary_Hs_ft": np.nan})
 
-    if len(group) == 0 or energy.sum() <= 0:
-        return pd.Series(
-            {
-                "surf_score": 0.0,
-                "bolinas_surf_min_ft": 0.0,
-                "bolinas_surf_max_ft": 0.0,
-                "wind_score": 0.0,
-                "tide_score": 0.0,
-                "wind_speed": 0.0,
-                "wind_direction": np.nan,
-                "wind_category": np.nan,
-                "tide_height": 0.0,
-                "dominant_Hs_ft": np.nan,
-                "dominant_Tp_s": np.nan,
-                "dominant_Dir_deg": np.nan,
-                "dominant_energy": 0.0,
-                "dominant_surf_score": 0.0,
-                "dominant_swell_score": 0.0,
-                "dominant_swell_propagation": 0.0,
-                "secondary_Hs_ft": np.nan,
-                "secondary_Tp_s": np.nan,
-                "secondary_Dir_deg": np.nan,
-                "secondary_energy": 0.0,
-                "secondary_surf_score": 0.0,
-                "secondary_energy_frac": 0.0,
-                "secondary_swell_score": 0.0,
-                "secondary_swell_propagation": 0.0,
-            }
-        )
-
-    # Energy-weighted surf score
-    surf_score = float(
-        np.round(np.average(group["partition_surf_score"], weights=energy), 1)
-    )
-
-    # Rank partitions by Bolinas surf relevance using height and swell score
-    group["partition_swell_score"] = group["partition_swell_score"].fillna(0.0)
-    ranked = group.sort_values(
-        by=["bolinas_surf_max_ft", "partition_swell_score"],
-        ascending=[False, False],
-    )
+    # Rank by Power (Hs^2 * Tp)
+    group["power"] = (group["Hs_ft"] ** 2) * group["Tp_s"]
+    ranked = group.sort_values(by="power", ascending=False)
 
     dom = ranked.iloc[0]
+    sec = ranked.iloc[1] if len(ranked) > 1 else None
 
-    if len(ranked) > 1:
-        sec = ranked.iloc[1]
-        secondary_energy_frac = _scalar(sec["partition_energy"]) / energy.sum()
-    else:
-        sec = None
-        secondary_energy_frac = 0.0
-
+    # Flatten into a single row for the UI
     return pd.Series(
         {
-            # Aggregated outcomes
-            "surf_score": surf_score,
-            "bolinas_surf_min_ft": float(_scalar(group["bolinas_surf_min_ft"].max())),
-            "bolinas_surf_max_ft": float(_scalar(group["bolinas_surf_max_ft"].max())),
-            "wind_score": float(_scalar(group["partition_wind_score"].max())),
-            "tide_score": float(_scalar(group["partition_tide_score"].max())),
-            "wind_speed": float(_scalar(group["wind_speed"].max())),
-            "wind_gust": float(_scalar(group["wind_gust"].max())),
-            "wind_direction": _scalar(group["wind_direction"].mean()),
-            "wind_category": _scalar(group["wind_category"].iloc[0]),
-            "tide_height": float(_scalar(group["tide_height"].max())),
-            # Dominant swell
-            "dominant_Hs_ft": float(_scalar(dom["Hs_ft"])),
-            "dominant_Tp_s": float(_scalar(dom["Tp_s"])),
-            "dominant_Dir_deg": float(_scalar(dom["Dir_deg"])),
-            "dominant_energy": float(_scalar(dom["partition_energy"])),
-            "dominant_surf_score": float(_scalar(dom["partition_surf_score"])),
-            "dominant_swell_score": float(_scalar(dom["partition_swell_score"])),
-            "dominant_swell_propagation": float(_scalar(dom["swell_propagation"])),
-            # Secondary swell
-            "secondary_Hs_ft": float(_scalar(sec["Hs_ft"]))
-            if sec is not None
-            else np.nan,
-            "secondary_Tp_s": float(_scalar(sec["Tp_s"]))
-            if sec is not None
-            else np.nan,
-            "secondary_Dir_deg": float(_scalar(sec["Dir_deg"]))
-            if sec is not None
-            else np.nan,
-            "secondary_energy": float(_scalar(sec["partition_energy"]))
-            if sec is not None
-            else 0.0,
-            "secondary_surf_score": float(_scalar(sec["partition_surf_score"]))
-            if sec is not None
-            else 0.0,
-            "secondary_energy_frac": float(secondary_energy_frac),
-            "secondary_swell_score": float(_scalar(sec["partition_swell_score"]))
-            if sec is not None
-            else 0.0,
-            "secondary_swell_propagation": float(_scalar(sec["swell_propagation"]))
-            if sec is not None
-            else 0.0,
+            # Environmental Context
+            "wind_speed": float(_scalar(group["wind_speed"])),
+            "wind_direction": float(_scalar(group["wind_direction"])),
+            "wind_category": _scalar(group["wind_category"]),
+            "tide_height": float(_scalar(group["tide_height"])),
+            # Dominant Swell Diagnostics (Raw WW3)
+            "dominant_Hs_ft": float(dom["Hs_ft"]),
+            "dominant_Tp_s": float(dom["Tp_s"]),
+            "dominant_Dir_deg": float(dom["Dir_deg"]),
+            "dominant_power_idx": round(float(dom["power"]), 1),
+            # Secondary Swell Diagnostics (Raw WW3)
+            "secondary_Hs_ft": float(sec["Hs_ft"]) if sec is not None else np.nan,
+            "secondary_Tp_s": float(sec["Tp_s"]) if sec is not None else np.nan,
+            "secondary_Dir_deg": float(sec["Dir_deg"]) if sec is not None else np.nan,
+            "secondary_power_idx": (
+                round(float(sec["power"]), 1) if sec is not None else 0.0
+            ),
         }
     )
 
 
 def process_data_wrapper(fetch_data_output: dict, config: dict):
     """
-    Purpose
-        Process and merge all forecast inputs, then compute an
-        energy-weighted surf score per hour using partitioned WW3 swell.
+    Synchronize and process multiple wave and atmospheric data sources into
+    a unified forecast for the Bolinas Streamlit UI.
+
+    This wrapper executes the high-level logic of the surf model:
+    1. Transforms CDIP MOP spectral data into nearshore 'Swell Quality' scores.
+    2. Translates nearshore heights and periods into surfable wave heights (ft).
+    3. Aligns and classifies wind data relative to the coastline (Onshore/Offshore).
+    4. Ranks global WW3 partitions by wave power to provide offshore context.
+    5. Integrates tidal and solar data to determine sessionability and daylight.
+    6. Renames all backend diagnostics to user-friendly UI labels.
+
+    Parameters
+    ----------
+    fetch_data_output : dict
+        A dictionary containing raw DataFrames and Datasets for 'cdip_mop',
+        'ww3', 'wind', 'tide', and 'sun'.
+    config : dict
+        A nested configuration dictionary containing model parameters,
+        coastline orientation, and wind/tide scoring thresholds.
 
     Returns
-        pandas.DataFrame
-            One row per hour with aggregated surf metrics and
-            dominant partition diagnostics.
+    -------
+    pandas.DataFrame
+        A fully processed, hourly-indexed forecast table where each row
+        contains all necessary metrics for a single UI dashboard entry,
+        including final 'Surf Scores', wave heights, and swell diagnostics.
     """
-    status("Starting Surf Model processing pipeline...")
+    status("Starting processing pipeline...")
 
     surf_cfg = config["surf_model"]
     data_src = config["data_sources"]
-
     coast_orientation = data_src["coast_orientation"]
-    forecast_hours = data_src["forecast_hours"]
 
-    # Prepare WW3: hourly + partitioned + units
-    df_ww3 = expand_ww3_for_surf_model(fetch_data_output["ww3"])
-    status(f"WW3 data expanded to hourly. Current shape: {df_ww3.shape}")
-    # expected columns:
-    # time, swell_idx, Hs_ft, Tp_s, Dir_deg
+    # CDIP MOP PROCESSING
+    status("Computing MOP spectral diagnostics and swell quality...")
+    mop_swell_score = compute_swell_score(fetch_data_output["cdip_mop"], surf_cfg)
+    mop_swell_df = expand_timeseries_data(mop_swell_score)
 
-    # Join environmental inputs onto partition rows
-    df_ww3 = df_ww3.join(
-        fetch_data_output["tide"][["tide_height"]], on="time", how="left"
+    # Predict heights (ft)
+    mop_heights = mop_swell_df.apply(
+        lambda row: predict_bolinas_surf_height(
+            row["hs_swell"] * 3.28084, row["tp"], surf_cfg["nearshore"]
+        ),
+        axis=1,
     )
+    mop_heights_df = pd.DataFrame(mop_heights.tolist(), index=mop_swell_df.index)
+    mop_combined = pd.concat([mop_swell_df, mop_heights_df], axis=1)
 
-    # Get wind to hourly then join
-    wind_df_hourly = expand_wind_to_hourly(
+    # ENVIRONMENTAL DATA
+    tide_df = fetch_data_output["tide"][["tide_height"]]
+    wind_df_hourly = expand_timeseries_data(
         fetch_data_output["wind"][["wind_speed", "wind_gust", "wind_direction"]]
     )
-    df_ww3 = df_ww3.join(wind_df_hourly, on="time", how="left")
 
-    # Wind Direction Classification
-    df_ww3["wind_category"] = df_ww3["wind_direction"].apply(
+    wind_df_hourly["wind_category"] = wind_df_hourly["wind_direction"].apply(
         lambda wd: classify_wind_relative_to_coast(
             wind_direction=wd,
             coast_orientation_deg=coast_orientation,
@@ -654,134 +536,96 @@ def process_data_wrapper(fetch_data_output: dict, config: dict):
         )
     )
 
-    # Partition-level surf physics
-    status("Computing Bolinas-specific wave propagation and surf heights...")
-    surf_heights = df_ww3.apply(
-        lambda row: predict_bolinas_surf_height(
-            row["Hs_ft"],
-            row["Tp_s"],
-            row["Dir_deg"],
-            surf_cfg["nearshore"],
-            surf_cfg["propagation"],
-        ),
-        axis=1,
-    )
+    # Merge
+    forecast_df = mop_combined.join(tide_df, how="left")
+    forecast_df = forecast_df.join(wind_df_hourly, how="left")
 
-    surf_heights_df = pd.DataFrame(surf_heights.tolist(), index=df_ww3.index)
+    # limit df to foreward looking
+    now_pacific = pd.Timestamp.now(pacific).floor("h").tz_localize(None)
+    forecast_df = forecast_df[forecast_df.index >= now_pacific]
 
-    df_ww3 = pd.concat([df_ww3, surf_heights_df], axis=1)
-
-    # Partition-level surf score
-    status("Calculating surf quality scores based on wind and tide alignment...")
-    score_outputs = df_ww3.apply(
+    # FINAL QUALITY SCORING
+    status("Applying penalties and generating scores...")
+    scoring_results = forecast_df.apply(
         lambda row: calculate_surf_score(
-            row["Tp_s"],
+            row["swell_score"],
             row["wind_speed"],
             row["wind_gust"],
             row["wind_category"],
             row["tide_height"],
-            row["bolinas_surf_min_ft"],
-            row["bolinas_surf_max_ft"],
-            row["swell_propagation"],
-            coast_orientation,
             surf_cfg,
         ),
         axis=1,
     )
 
-    df_ww3[
-        [
-            "partition_surf_score",
-            "partition_swell_score",
-            "partition_wind_score",
-            "partition_tide_score",
-        ]
-    ] = pd.DataFrame(score_outputs.tolist(), index=df_ww3.index)
+    forecast_df[
+        ["final_surf_score", "primary_swell_score", "wind_score", "tide_score"]
+    ] = pd.DataFrame(scoring_results.tolist(), index=forecast_df.index)
 
-    # Partition energy (for weighting)
-    df_ww3["partition_energy"] = df_ww3.apply(
-        lambda r: compute_partition_energy(
-            r["bolinas_surf_min_ft"],
-            r["bolinas_surf_max_ft"],
-            r["Tp_s"],
-            surf_cfg["energy"],
-        ),
-        axis=1,
+    # WW3 PARTITION CONTEXT (Diagnostic Only)
+    # We use power ranking to pick the Dominant/Secondary for the UI strings
+    df_ww3 = expand_timeseries_data(fetch_data_output["ww3"])
+    if isinstance(df_ww3.index, pd.MultiIndex):
+        df_ww3 = df_ww3.reset_index(level=0, drop=True)
+    df_ww3["Hs_ft"] = df_ww3["Hs_m"] * 3.28084
+
+    df_ww3 = df_ww3.join(tide_df, how="left")
+    df_ww3 = df_ww3.join(wind_df_hourly, how="left")
+
+    ww3_context = (
+        df_ww3.reset_index().groupby("time").apply(aggregate_hourly_partitions)
+    )
+    forecast_df = forecast_df.join(
+        ww3_context[
+            [
+                "dominant_Hs_ft",
+                "dominant_Tp_s",
+                "dominant_Dir_deg",
+                "dominant_power_idx",
+                "secondary_Hs_ft",
+                "secondary_Tp_s",
+                "secondary_Dir_deg",
+                "secondary_power_idx",
+            ]
+        ],
+        how="left",
     )
 
-    # Aggregate to one row per hour
-    status("Aggregating swell partitions into final hourly forecast...")
-    forecast_df = df_ww3.groupby("time").apply(aggregate_hourly_partitions).sort_index()
-
-    # Daylight logic (hourly, post-aggregation)
+    # DAYLIGHT LOGIC
     forecast_df["date"] = forecast_df.index.date
-
     forecast_df = forecast_df.join(
         fetch_data_output["sun"][["first_light", "last_light"]], on="date", how="left"
     )
-
     forecast_df["is_daylight"] = (forecast_df.index >= forecast_df["first_light"]) & (
         forecast_df.index <= forecast_df["last_light"]
     )
 
-    forecast_df = forecast_df.drop(columns=["date"])
+    # UI RENAMING (Mapping Backend to Streamlit)
+    rename_map = {
+        "final_surf_score": "Surf Score (1-10)",
+        "bolinas_surf_min_ft": "Surf Height Min (ft)",
+        "bolinas_surf_max_ft": "Surf Height Max (ft)",
+        "primary_swell_score": "Dominant Swell Score (1-10)",  # Matches UI Breakdown
+        "wind_score": "Wind Score (1-10)",
+        "tide_score": "Tide Score (1-10)",
+        "wind_speed": "Wind Speed (MPH)",
+        "wind_gust": "Wind Gust (MPH)",
+        "wind_direction": "Wind Direction (Deg)",
+        "wind_category": "Wind Direction",
+        "tide_height": "Tide Height (ft)",
+        "dominant_Hs_ft": "Dominant Swell Size (ft)",
+        "dominant_Tp_s": "Dominant Swell Period",
+        "dominant_Dir_deg": "Dominant Swell Direction",
+        "secondary_Hs_ft": "Secondary Swell Size (ft)",
+        "secondary_Tp_s": "Secondary Swell Period",
+        "secondary_Dir_deg": "Secondary Swell Direction",
+        "hs_swell": "MOP Hs (m)",
+        "tp": "Peak Period (s)",
+        "dp": "Peak Direction (deg)",
+        "spread": "Directional Spread (deg)",
+    }
 
-    # Final display
-    forecast_df = forecast_df[
-        [
-            "surf_score",
-            "bolinas_surf_min_ft",
-            "bolinas_surf_max_ft",
-            "wind_speed",
-            "wind_gust",
-            "wind_direction",
-            "wind_category",
-            "tide_height",
-            "dominant_Hs_ft",
-            "dominant_Tp_s",
-            "dominant_Dir_deg",
-            "dominant_surf_score",
-            "dominant_swell_score",
-            "dominant_swell_propagation",
-            "secondary_Hs_ft",
-            "secondary_Tp_s",
-            "secondary_Dir_deg",
-            "secondary_surf_score",
-            "secondary_swell_score",
-            "secondary_swell_propagation",
-            "wind_score",
-            "tide_score",
-            "is_daylight",
-        ]
-    ]
-
-    # Rename for end-user display
-    forecast_df = forecast_df.rename(
-        columns={
-            "surf_score": "Surf Score (1-10)",
-            "bolinas_surf_min_ft": "Surf Height Min (ft)",
-            "bolinas_surf_max_ft": "Surf Height Max (ft)",
-            "wind_speed": "Wind Speed (MPH)",
-            "wind_gust": "Wind Gust (MPH)",
-            "wind_direction": "Wind Direction (Deg)",
-            "wind_category": "Wind Direction",
-            "tide_height": "Tide Height (ft)",
-            "dominant_Hs_ft": "Dominant Swell Size (ft)",
-            "dominant_Tp_s": "Dominant Swell Period",
-            "dominant_Dir_deg": "Dominant Swell Direction",
-            "secondary_Hs_ft": "Secondary Swell Size (ft)",
-            "secondary_Tp_s": "Secondary Swell Period",
-            "secondary_Dir_deg": "Secondary Swell Direction",
-            "dominant_surf_score": "Dominant Surf Score (1-10)",
-            "secondary_surf_score": "Secondary Surf Score (1-10)",
-            "wind_score": "Wind Score (1-10)",
-            "tide_score": "Tide Score (1-10)",
-            "dominant_swell_score": "Dominant Swell Score (1-10)",
-            "secondary_swell_score": "Secondary Swell Score (1-10)",
-            "dominant_swell_propagation": "Dominant Propagation Score (0-1)",
-            "secondary_swell_propagation": "Secondary Propagation Score (0-1)",
-        }
-    )
+    forecast_df = forecast_df.rename(columns=rename_map)
     status(f"Processing complete. Final forecast rows: {len(forecast_df)}")
 
     return forecast_df

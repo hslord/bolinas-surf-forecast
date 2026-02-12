@@ -2,6 +2,9 @@
 import pandas as pd
 import numpy as np
 from reference_functions import status
+from zoneinfo import ZoneInfo
+
+pacific = ZoneInfo("America/Los_Angeles")
 
 
 def classify_wind_relative_to_coast(
@@ -319,31 +322,44 @@ def calculate_surf_score(
         "crosshore": w_cfg["crosshore_penalty_weight"],
         "onshore": w_cfg["onshore_penalty_weight"],
     }
-    w_dir = w_dir_map.get(wind_category, 1.0)  # Default to onshore if error
+    # don't penalize scores if wind is null
+    if pd.isna(wind_speed) or wind_category is np.nan:
+        wind_score = np.nan
+        w_penalty = 1.0
+    else:
+        w_dir = w_dir_map.get(wind_category, 1.0)  # Default to onshore if error
 
-    # Calculate gust factor (weighted average)
-    gust_weight = w_cfg["gust_weight"]
-    adjusted_speed = (wind_speed * (1 - gust_weight)) + (wind_gust * gust_weight)
+        # Calculate gust factor (weighted average)
+        gust_weight = w_cfg["gust_weight"]
+        adjusted_speed = (wind_speed * (1 - gust_weight)) + (wind_gust * gust_weight)
 
-    # Calculate penalty: (Effective Speed - Floor) / Range
-    effective_speed = adjusted_speed * w_dir
-    w_penalty = np.clip(
-        1 - (effective_speed - w_cfg["speed_floor"]) / w_cfg["speed_range"],
-        w_cfg["penalty_min"],
-        1.0,
-    )
-    wind_score = w_penalty * 10.0
+        # Calculate penalty: (Effective Speed - Floor) / Range
+        effective_speed = adjusted_speed * w_dir
+        w_penalty = np.clip(
+            1 - (effective_speed - w_cfg["speed_floor"]) / w_cfg["speed_range"],
+            w_cfg["penalty_min"],
+            1.0,
+        )
+        wind_score = w_penalty * 10.0
 
     # TIDE COMPONENT
     t_cfg = surf_model["tide"]
 
-    # Gaussian Falloff: exp(-0.5 * ((current - optimal) / sigma)^2)
-    t_penalty = np.clip(
-        np.exp(-0.5 * ((tide_height - t_cfg["optimal_height"]) / t_cfg["sigma"]) ** 2),
-        t_cfg["penalty_min"],
-        1.0,
-    )
-    tide_score = t_penalty * 10.0
+    # don't penalize scores if tide  is null
+    if pd.isna(tide_height):
+        tide_score = np.nan
+        t_penalty = 1.0
+
+    else:
+        # Gaussian Falloff: exp(-0.5 * ((current - optimal) / sigma)^2)
+        t_penalty = np.clip(
+            np.exp(
+                -0.5 * ((tide_height - t_cfg["optimal_height"]) / t_cfg["sigma"]) ** 2
+            ),
+            t_cfg["penalty_min"],
+            1.0,
+        )
+        tide_score = t_penalty * 10.0
 
     # FINAL SCORE
     f_cfg = surf_model["final_scoring"]
@@ -360,10 +376,16 @@ def calculate_surf_score(
         tide_reduction = 0
 
     # Combine penalties and apply safety floor
-    final_multiplier = max(f_cfg["min_multiplier"], 1.0 - wind_reduction - tide_reduction)
+    final_multiplier = max(
+        f_cfg["min_multiplier"], 1.0 - wind_reduction - tide_reduction
+    )
 
-    # Scale swell potential by calculated dampener for por wind and/or tide
-    final_score = swell_score * final_multiplier
+    # Scale swell potential by calculated dampener for p0or wind and/or tide
+    raw_final = swell_score * final_multiplier
+
+    # But final_score cannot be less than the lowest of any individual score
+    lowest_individual_score = min(swell_score, wind_score, tide_score)
+    final_score = max(raw_final, lowest_individual_score)
 
     return (
         round(float(final_score), 1),
@@ -503,8 +525,12 @@ def process_data_wrapper(fetch_data_output: dict, config: dict):
     )
 
     # Merge
-    forecast_df = mop_combined.join(tide_df, how="inner")
+    forecast_df = mop_combined.join(tide_df, how="left")
     forecast_df = forecast_df.join(wind_df_hourly, how="left")
+
+    # limit df to foreward looking
+    now_pacific = pd.Timestamp.now(pacific).floor("h").tz_localize(None)
+    forecast_df = forecast_df[forecast_df.index >= now_pacific]
 
     # FINAL QUALITY SCORING
     status("Applying penalties and generating scores...")
@@ -550,7 +576,7 @@ def process_data_wrapper(fetch_data_output: dict, config: dict):
                 "secondary_power_idx",
             ]
         ],
-        how="inner",
+        how="left",
     )
 
     # DAYLIGHT LOGIC

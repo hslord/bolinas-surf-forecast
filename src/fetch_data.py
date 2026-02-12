@@ -5,9 +5,8 @@ from noaa_coops import Station
 from zoneinfo import ZoneInfo
 import xarray as xr
 import pandas as pd
-import numpy as np
 import time
-from typing import Dict, Any, List
+from typing import Dict
 from reference_functions import status
 
 pacific = ZoneInfo("America/Los_Angeles")
@@ -33,115 +32,108 @@ def fetch_ww3_timeseries(
     """
     status(f"Opening WW3 Dataset at {url[:50]}...")
 
-    # 1) Open dataset
-    ds = xr.open_dataset(url, engine="netcdf4")
+    try:
 
-    # 2) Detect coordinate names
-    latname = next(c for c in ds.coords if "lat" in c.lower())
-    lonname = next(c for c in ds.coords if "lon" in c.lower())
+        # Open dataset
+        ds = xr.open_dataset(url, engine="netcdf4")
 
-    if "time" not in ds.coords:
-        raise RuntimeError("WW3 dataset missing forecast-valid 'time' coordinate")
+        # Detect coordinate names
+        latname = next(c for c in ds.coords if "lat" in c.lower())
+        lonname = next(c for c in ds.coords if "lon" in c.lower())
 
-    # Longitude convention handling
-    lon_coord = ds[lonname]
-    lon_val = float(lon_valid)
-    if float(lon_coord.max()) <= 180.0 and lon_val > 180.0:
-        lon_val -= 360.0
+        # Longitude convention handling
+        lon_coord = ds[lonname]
+        lon_val = float(lon_valid)
+        if float(lon_coord.max()) <= 180.0 and lon_val > 180.0:
+            lon_val -= 360.0
 
-    # 3) Partitioned swell variables
-    var_hs = "Significant_height_of_swell_waves_ordered_sequence_of_data"
-    var_tp = "Mean_period_of_swell_waves_ordered_sequence_of_data"
-    var_dir = "Direction_of_swell_waves_ordered_sequence_of_data"
+        # Partitioned swell variables
+        var_hs = "Significant_height_of_swell_waves_ordered_sequence_of_data"
+        var_tp = "Mean_period_of_swell_waves_ordered_sequence_of_data"
+        var_dir = "Direction_of_swell_waves_ordered_sequence_of_data"
 
-    for v in (var_hs, var_tp, var_dir):
-        if v not in ds.data_vars:
-            raise RuntimeError(f"Missing WW3 variable: {v}")
+        part_dim = next(d for d in ds[var_hs].dims if "sequence" in d.lower())
 
-    part_dim = next(d for d in ds[var_hs].dims if "sequence" in d.lower())
+        # Forecast time window (UTC, tz-naive)
+        start_pacific = datetime.now(pacific).replace(minute=0, second=0, microsecond=0)
+        end_pacific = start_pacific + timedelta(hours=int(forecast_hours))
 
-    # 4) Forecast time window (UTC, tz-naive)
-    start_pacific = datetime.now(pacific).replace(minute=0, second=0, microsecond=0)
-    end_pacific = start_pacific + timedelta(hours=int(forecast_hours))
+        start_utc = pd.Timestamp(start_pacific).tz_convert("UTC").tz_localize(None)
+        end_utc = pd.Timestamp(end_pacific).tz_convert("UTC").tz_localize(None)
 
-    start_utc = pd.Timestamp(start_pacific).tz_convert("UTC").tz_localize(None)
-    end_utc = pd.Timestamp(end_pacific).tz_convert("UTC").tz_localize(None)
+        # Lazy subset (forecast-valid time ONLY)
+        sub = xr.Dataset(
+            {
+                "Hs_m": ds[var_hs],
+                "Tp_s": ds[var_tp],
+                "Dir_deg": ds[var_dir],
+            }
+        )
 
-    # 5) Lazy subset (forecast-valid time ONLY)
-    sub = xr.Dataset(
-        {
-            "Hs_m": ds[var_hs],
-            "Tp_s": ds[var_tp],
-            "Dir_deg": ds[var_dir],
-        }
-    )
+        # Nearest spatial point
+        sub = sub.sel(
+            {latname: lat_valid, lonname: lon_val},
+            method="nearest",
+        )
 
-    # Nearest spatial point
-    sub = sub.sel(
-        {latname: lat_valid, lonname: lon_val},
-        method="nearest",
-    )
+        # Forecast window — ONLY forecast-valid time
+        sub = sub.sel({"time": slice(start_utc, end_utc)})
 
-    # Forecast window — ONLY forecast-valid time
-    sub = sub.sel({"time": slice(start_utc, end_utc)})
+        # Partition limit
+        sub = sub.isel({part_dim: slice(0, int(max_partitions))})
 
-    # Partition limit
-    sub = sub.isel({part_dim: slice(0, int(max_partitions))})
+        # Align any variables that use time1 → time
+        tvals = sub["time"].values
 
-    # 6) Align any variables that use time1 → time
-    tvals = sub["time"].values
+        for var in ["Hs_m", "Tp_s", "Dir_deg"]:
+            if "time1" in sub[var].dims:
+                aligned = (
+                    sub[var]
+                    .sel(time1=tvals)
+                    .assign_coords({"time": ("time1", tvals)})
+                    .swap_dims({"time1": "time"})
+                )
+                sub[var] = aligned
 
-    for var in ["Hs_m", "Tp_s", "Dir_deg"]:
-        if "time1" in sub[var].dims:
-            aligned = (
-                sub[var]
-                .sel(time1=tvals)
-                .assign_coords({"time": ("time1", tvals)})
-                .swap_dims({"time1": "time"})
-            )
-            sub[var] = aligned
+        # Drop time1 everywhere (hard guarantee)
+        if "time1" in sub.coords:
+            sub = sub.drop_vars("time1")
 
-    # Drop time1 everywhere (hard guarantee)
-    if "time1" in sub.coords:
-        sub = sub.drop_vars("time1")
+        # Load aligned dataset
+        sub = sub.load()
 
-    # Final sanity check
-    for v in ["Hs_m", "Tp_s", "Dir_deg"]:
-        if "time" not in sub[v].dims:
-            raise RuntimeError(
-                f"{v} is not aligned to forecast-valid time; dims={sub[v].dims}"
-            )
+        # Convert to long-form pandas
+        sub = sub.reset_coords(drop=True)
+        stacked = sub.stack(_row=("time", part_dim))
 
-    # 7) Load aligned dataset
-    sub = sub.load()
+        df = stacked.to_dataframe()[["Hs_m", "Tp_s", "Dir_deg"]].reset_index()
 
-    # 8) Convert to long-form pandas
-    sub = sub.reset_coords(drop=True)
-    stacked = sub.stack(_row=("time", part_dim))
+        df = df.rename(columns={part_dim: "swell_idx"})
 
-    df = stacked.to_dataframe()[["Hs_m", "Tp_s", "Dir_deg"]].reset_index()
+        df = df.dropna(subset=["Hs_m", "Tp_s", "Dir_deg"])
 
-    df = df.rename(columns={part_dim: "swell_idx"})
+        # Convert time to Pacific tz-naive
+        df["time"] = (
+            pd.to_datetime(df["time"], utc=True)
+            .dt.tz_convert(pacific)
+            .dt.tz_localize(None)
+        )
 
-    df = df.dropna(subset=["Hs_m", "Tp_s", "Dir_deg"])
-    df = df[df["Hs_m"] > 0]
+        df = df.set_index("time").sort_index()
 
-    # Convert time to Pacific tz-naive
-    df["time"] = (
-        pd.to_datetime(df["time"], utc=True).dt.tz_convert(pacific).dt.tz_localize(None)
-    )
+        status(f"WW3 subset loaded: {len(df)} swell partitions found.")
 
-    df = df.set_index("time").sort_index()
+        return df
 
-    # Enforce dtypes
-    df["swell_idx"] = df["swell_idx"].astype(int, errors="ignore")
-    df["Hs_m"] = df["Hs_m"].astype(float, errors="ignore")
-    df["Tp_s"] = df["Tp_s"].astype(float, errors="ignore")
-    df["Dir_deg"] = df["Dir_deg"].astype(float, errors="ignore")
+    except (RuntimeError, KeyError, ValueError) as e:
+        status(
+            f"Warning: WW3 data not as expected. Continuing without swell partitions: {e}"
+        )
+        return pd.DataFrame()
 
-    status(f"WW3 subset loaded: {len(df)} swell partitions found.")
-
-    return df
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        status(f"Warning: Unspecified WW3 load error. Using empty data: {e}")
+        return pd.DataFrame()
 
 
 def fetch_cdip_mop_forecast(mop_number, min_swell_frequency, forecast_model="ecmwf"):
@@ -170,30 +162,37 @@ def fetch_cdip_mop_forecast(mop_number, min_swell_frequency, forecast_model="ecm
         (significant height), 'Tp_s' (peak period), and 'Dir_deg' (direction).
     """
     status(f"Fetching swell forecast for MOP {mop_number}...")
-    # MOP THREDDS OPeNDAP
-    if forecast_model == "ncep":
-        fc_url = (
-            "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
-            f"cdip/model/MOP_alongshore/{mop_number}_forecast.nc"
+
+    try:
+        # MOP THREDDS OPeNDAP
+        if forecast_model == "ncep":
+            fc_url = (
+                "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
+                f"cdip/model/MOP_alongshore/{mop_number}_forecast.nc"
+            )
+        else:
+            fc_url = (
+                "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
+                f"cdip/model/MOP_alongshore/{mop_number}_ecmwf_fc.nc"
+            )
+
+        fc_swell = xr.open_dataset(fc_url, engine="netcdf4")
+
+        # Filter to swell band (periods > 10s, i.e. frequencies < 0.1 Hz)
+        fc_swell = fc_swell.sel(
+            waveFrequency=fc_swell.waveFrequency[
+                fc_swell.waveFrequency < min_swell_frequency
+            ]
         )
-    else:
-        fc_url = (
-            "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
-            f"cdip/model/MOP_alongshore/{mop_number}_ecmwf_fc.nc"
-        )
 
-    fc_swell = xr.open_dataset(fc_url, engine="netcdf4")
+        status("Retrieved swell forecast.")
 
-    # Filter to swell band (periods > 10s, i.e. frequencies < 0.1 Hz)
-    fc_swell = fc_swell.sel(
-        waveFrequency=fc_swell.waveFrequency[
-            fc_swell.waveFrequency < min_swell_frequency
-        ]
-    )
+        return fc_swell
 
-    status("Retrieved swell forecast.")
+    except Exception as e:
+        status(f"CRITICAL ERROR: CDIP MOP Forecast unreachable: {e}")
 
-    return fc_swell
+        raise ConnectionError(f"Critical CDIP MOP swell data fetch failed: {e}") from e
 
 
 def fetch_tide_predictions(station_id: str, days: int = 14):
@@ -221,30 +220,39 @@ def fetch_tide_predictions(station_id: str, days: int = 14):
     begin = datetime.now(pacific)
     end = begin + timedelta(days=days)
 
-    # Fetch data - use lst_ldt which returns local time for the station
-    df = station.get_data(
-        begin_date=begin.strftime("%Y%m%d"),
-        end_date=end.strftime("%Y%m%d"),
-        product="predictions",
-        datum="MLLW",
-        interval="h",
-        units="english",
-        time_zone="lst_ldt",  # Local standard/daylight time
-    )
+    try:
+        # Fetch data - use lst_ldt which returns local time for the station
+        df = station.get_data(
+            begin_date=begin.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+            product="predictions",
+            datum="MLLW",
+            interval="h",
+            units="english",
+            time_zone="lst_ldt",  # Local standard/daylight time
+        )
 
-    df.rename(columns={"v": "tide_height"}, inplace=True)
+        df.rename(columns={"v": "tide_height"}, inplace=True)
 
-    # The noaa_coops library returns timezone-naive datetimes
-    if df.index.tz is None:
-        # Localize to Pacific time (assumes the times are already in Pacific)
-        df.index = df.index.tz_localize(pacific).tz_localize(None)
-    else:
-        # If it somehow has timezone info, convert to Pacific
-        df.index = df.index.tz_convert(pacific).tz_localize(None)
+        # The noaa_coops library returns timezone-naive datetimes
+        if df.index.tz is None:
+            # Localize to Pacific time (assumes the times are already in Pacific)
+            df.index = df.index.tz_localize(pacific).tz_localize(None)
+        else:
+            # If it somehow has timezone info, convert to Pacific
+            df.index = df.index.tz_convert(pacific).tz_localize(None)
 
-    status(f"Retrieved {len(df)} tide data points.")
+        status(f"Retrieved {len(df)} tide data points.")
 
-    return df
+        return df
+
+    except (RuntimeError, KeyError, ValueError) as e:
+        status(f"Warning: tide data not as expected. Continuing without: {e}")
+        return pd.DataFrame()
+
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        status(f"Warning: Unspecified tide load error. Using empty data: {e}")
+        return pd.DataFrame()
 
 
 def fetch_wind_forecast(lat: float, lon: float, days: int = 14):
@@ -308,9 +316,14 @@ def fetch_wind_forecast(lat: float, lon: float, days: int = 14):
         status(f"Retrieved {len(df)} wind data points from Open-Meteo.")
 
         return df
-    except Exception as e:
-        status(f"Error fetching wind from Open-Meteo: {e}")
-        # empty df allows forecast to continue
+
+    except requests.exceptions.RequestException as e:
+        # Flag the specific network/API error clearly in the console/logs
+        status(f"Warning: Wind forecast unavailable. Using empty data: {e}")
+        return pd.DataFrame()
+
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        status(f"Warning: Unspecified wind load error. Using empty data: {e}")
         return pd.DataFrame()
 
 
@@ -341,51 +354,62 @@ def fetch_sunrise_sunset(lat: float, lon: float, days: int = 14):
     sun_data = []
     start_date = datetime.now(pacific).date()  # Use Pacific time for start date
 
-    for i in range(days):
-        date = start_date + timedelta(days=i)
-        url = f"https://api.sunrise-sunset.org/json?lat={lat}&lng={lon}&date={date}&formatted=0"
+    try:
+        for i in range(days):
+            date = start_date + timedelta(days=i)
+            url = f"https://api.sunrise-sunset.org/json?lat={lat}&lng={lon}&date={date}&formatted=0"
 
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            data = response.json()
 
-        sunrise = (
-            pd.to_datetime(data["results"]["sunrise"], utc=True)
-            .tz_convert(pacific)
-            .tz_localize(None)
-        )
-        sunset = (
-            pd.to_datetime(data["results"]["sunset"], utc=True)
-            .tz_convert(pacific)
-            .tz_localize(None)
-        )
-        first_light = (
-            pd.to_datetime(data["results"]["civil_twilight_begin"], utc=True)
-            .tz_convert(pacific)
-            .tz_localize(None)
-        )
-        last_light = (
-            pd.to_datetime(data["results"]["civil_twilight_end"], utc=True)
-            .tz_convert(pacific)
-            .tz_localize(None)
-        )
+            sunrise = (
+                pd.to_datetime(data["results"]["sunrise"], utc=True)
+                .tz_convert(pacific)
+                .tz_localize(None)
+            )
+            sunset = (
+                pd.to_datetime(data["results"]["sunset"], utc=True)
+                .tz_convert(pacific)
+                .tz_localize(None)
+            )
+            first_light = (
+                pd.to_datetime(data["results"]["civil_twilight_begin"], utc=True)
+                .tz_convert(pacific)
+                .tz_localize(None)
+            )
+            last_light = (
+                pd.to_datetime(data["results"]["civil_twilight_end"], utc=True)
+                .tz_convert(pacific)
+                .tz_localize(None)
+            )
 
-        sun_data.append(
-            {
-                "date": date,
-                "sunrise": sunrise,
-                "sunset": sunset,
-                "first_light": first_light,
-                "last_light": last_light,
-            }
-        )
-        time.sleep(0.5)  # Wait half a second between requests to avoid getting blocked
+            sun_data.append(
+                {
+                    "date": date,
+                    "sunrise": sunrise,
+                    "sunset": sunset,
+                    "first_light": first_light,
+                    "last_light": last_light,
+                }
+            )
+            time.sleep(
+                0.5
+            )  # Wait half a second between requests to avoid getting blocked
 
-    df = pd.DataFrame(sun_data).set_index("date").sort_index()
+        df = pd.DataFrame(sun_data).set_index("date").sort_index()
 
-    status(f"Retrieved {len(df)} daylight data points.")
+        status(f"Retrieved {len(df)} daylight data points.")
 
-    return df
+        return df
+
+    except (RuntimeError, KeyError, ValueError) as e:
+        status(f"Warning: sunrise/sunset data not as expected. Continuing without: {e}")
+        return pd.DataFrame()
+
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        status(f"Warning: Unspecified sunrise/sunset load error. Using empty data: {e}")
+        return pd.DataFrame()
 
 
 def fetch_data_wrapper(data_sources: Dict):
@@ -418,11 +442,8 @@ def fetch_data_wrapper(data_sources: Dict):
 
     # Helper to run a fetch function and catch errors
     def safe_fetch(key, func, *args, **kwargs):
-        try:
-            results[key] = func(*args, **kwargs)
-            status(f"Successfully fetched {key}")
-        except Exception as e:
-            status(f"ERROR fetching {key}: {e}")
+        results[key] = func(*args, **kwargs)
+        status(f"Successfully fetched {key}")
 
     # offshore swell
     safe_fetch(

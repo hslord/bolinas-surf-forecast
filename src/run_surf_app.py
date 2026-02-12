@@ -33,7 +33,7 @@ def load_forecast():
         status(f"CRITICAL: Config file not found at {CONFIG_PATH}")
         return None
 
-    with open(CONFIG_PATH, "r") as f:
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     # Fetch data

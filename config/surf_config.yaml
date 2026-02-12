@@ -81,7 +81,7 @@ surf_model:
     offshore_penalty_weight: 0.7  
     crosshore_penalty_weight: 1.0
     onshore_penalty_weight: 1.0
-    gust_weight: 0.4         # 0.5 means the gust and steady wind are equally important
+    gust_weight: 0.3         # 0.5 means the gust and steady wind are equally important
     speed_floor: 4.0          # Wind speed below this has 0 penalty (glassy)
     speed_range: 12.0         # The divisor; how many mph it takes to go from glass to blown out
     penalty_min: 0.25          # The lowest possible multiplier (blown out)
@@ -90,3 +90,4 @@ surf_model:
     wind_impact_weight: 0.60   # Max reduction from wind
     tide_impact_weight: 0.60   # Max reduction from tide
     min_multiplier: 0.20       # Absolute floor
+    secondary_penalty: 0.2     # Primary penalty is 100%, secondary penalty is x%

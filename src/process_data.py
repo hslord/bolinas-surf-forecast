@@ -361,26 +361,51 @@ def calculate_surf_score(
         )
         tide_score = t_penalty * 10.0
 
+    # # FINAL SCORE
+    # f_cfg = surf_model["final_scoring"]
+
+    # # Only penalize if the component quality is lower than the swell quality
+    # if wind_score < swell_score:
+    #     wind_reduction = (1.0 - w_penalty) * f_cfg["wind_impact_weight"]
+    # else:
+    #     wind_reduction = 0
+
+    # if tide_score < swell_score:
+    #     tide_reduction = (1.0 - t_penalty) * f_cfg["tide_impact_weight"]
+    # else:
+    #     tide_reduction = 0
+
+    # # Combine penalties and apply safety floor
+    # final_multiplier = max(
+    #     f_cfg["min_multiplier"], 1.0 - wind_reduction - tide_reduction
+    # )
+
+    # # Scale swell potential by calculated dampener for p0or wind and/or tide
+    # raw_final = swell_score * final_multiplier
+
     # FINAL SCORE
     f_cfg = surf_model["final_scoring"]
 
-    # Only penalize if the component quality is lower than the swell quality
-    if wind_score < swell_score:
-        wind_reduction = (1.0 - w_penalty) * f_cfg["wind_impact_weight"]
-    else:
-        wind_reduction = 0
-
-    if tide_score < swell_score:
-        tide_reduction = (1.0 - t_penalty) * f_cfg["tide_impact_weight"]
-    else:
-        tide_reduction = 0
-
-    # Combine penalties and apply safety floor
-    final_multiplier = max(
-        f_cfg["min_multiplier"], 1.0 - wind_reduction - tide_reduction
+    # Calculate individual potential reductions
+    w_red = (
+        (1.0 - w_penalty) * f_cfg["wind_impact_weight"]
+        if wind_score < swell_score
+        else 0
+    )
+    t_red = (
+        (1.0 - t_penalty) * f_cfg["tide_impact_weight"]
+        if tide_score < swell_score
+        else 0
     )
 
-    # Scale swell potential by calculated dampener for p0or wind and/or tide
+    # Use 100% of the worse penalty + x% of the lesser penalty
+    primary_red = max(w_red, t_red)
+    secondary_red = min(w_red, t_red)
+
+    combined_reduction = primary_red + (secondary_red * f_cfg["secondary_penalty"])
+
+    final_multiplier = max(f_cfg["min_multiplier"], 1.0 - combined_reduction)
+
     raw_final = swell_score * final_multiplier
 
     # But final_score cannot be less than the lowest of any individual score

@@ -126,14 +126,12 @@ def fetch_ww3_timeseries(
         return df
 
     except (RuntimeError, KeyError, ValueError) as e:
-        status(
-            f"Warning: WW3 data not as expected. Continuing without swell partitions: {e}"
-        )
-        return pd.DataFrame()
+        status(f"CRITICAL: WW3 data format is invalid or missing keys: {e}")
+        raise RuntimeError(f"WW3 data validation failed: {e}") from e
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        status(f"Warning: Unspecified WW3 load error. Using empty data: {e}")
-        return pd.DataFrame()
+    except Exception as e:
+        status(f"CRITICAL: Unspecified ww3 load error: {e}")
+        raise SystemExit(f"Pipeline stopped due to ww3 fetch failure: {e}") from e
 
 
 def fetch_cdip_mop_forecast(mop_number, min_swell_frequency, forecast_model="ecmwf"):
@@ -189,10 +187,13 @@ def fetch_cdip_mop_forecast(mop_number, min_swell_frequency, forecast_model="ecm
 
         return fc_swell
 
-    except Exception as e:
-        status(f"CRITICAL ERROR: CDIP MOP Forecast unreachable: {e}")
+    except (RuntimeError, KeyError, ValueError) as e:
+        status(f"CRITICAL: CDIP MOP data format is invalid or missing keys: {e}")
+        raise RuntimeError(f"CDIP MOP data validation failed: {e}") from e
 
-        raise ConnectionError(f"Critical CDIP MOP swell data fetch failed: {e}") from e
+    except Exception as e:
+        status(f"CRITICAL: Unspecified CDIP MOP load error: {e}")
+        raise SystemExit(f"Pipeline stopped due to CDIP MOP fetch failure: {e}") from e
 
 
 def fetch_tide_predictions(station_id: str, days: int = 14):
@@ -247,12 +248,12 @@ def fetch_tide_predictions(station_id: str, days: int = 14):
         return df
 
     except (RuntimeError, KeyError, ValueError) as e:
-        status(f"Warning: tide data not as expected. Continuing without: {e}")
-        return pd.DataFrame()
+        status(f"CRITICAL: Tide data format is invalid or missing keys: {e}")
+        raise RuntimeError(f"Tide data validation failed: {e}") from e
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        status(f"Warning: Unspecified tide load error. Using empty data: {e}")
-        return pd.DataFrame()
+    except Exception as e:
+        status(f"CRITICAL: Unspecified tide load error: {e}")
+        raise SystemExit(f"Pipeline stopped due to tide fetch failure: {e}") from e
 
 
 def fetch_wind_forecast(lat: float, lon: float, days: int = 14):
@@ -317,14 +318,13 @@ def fetch_wind_forecast(lat: float, lon: float, days: int = 14):
 
         return df
 
-    except requests.exceptions.RequestException as e:
-        # Flag the specific network/API error clearly in the console/logs
-        status(f"Warning: Wind forecast unavailable. Using empty data: {e}")
-        return pd.DataFrame()
+    except (RuntimeError, KeyError, ValueError) as e:
+        status(f"CRITICAL: Wind data format is invalid or missing keys: {e}")
+        raise RuntimeError(f"Wind data validation failed: {e}") from e
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        status(f"Warning: Unspecified wind load error. Using empty data: {e}")
-        return pd.DataFrame()
+    except Exception as e:
+        status(f"CRITICAL: Unspecified wind load error: {e}")
+        raise SystemExit(f"Pipeline stopped due to wind fetch failure: {e}") from e
 
 
 def fetch_sunrise_sunset(lat: float, lon: float, days: int = 14):

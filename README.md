@@ -66,14 +66,37 @@ make ui
 
 ### Makefile Commands
 
-| Command        | Description                                |
-|----------------|--------------------------------------------|
-| `make install` | Install/upgrade Python dependencies        |
-| `make run`     | Run the data fetch + processing pipeline   |
-| `make ui`      | Launch the Streamlit dashboard             |
-| `make lint`    | Run Pylint on `src/`                       |
-| `make format`  | Auto-format code with Black                |
-| `make clean`   | Remove `__pycache__` and temp files        |
+| Command          | Description                                              |
+|------------------|----------------------------------------------------------|
+| `make install`   | Install/upgrade Python dependencies                      |
+| `make run`       | Run the data fetch + processing pipeline                 |
+| `make ui`        | Launch the Streamlit dashboard                           |
+| `make test`      | Run all tests (unit + config sensitivity)                            |
+| `make coverage`  | Run unit tests with coverage report                      |
+| `make lint`      | Run Pylint on `src/` and `test/`                         |
+| `make format`    | Auto-format code with Black                              |
+| `make clean`     | Remove `__pycache__`, `.pytest_cache`, and temp files    |
+
+---
+
+## Testing
+
+Unit tests and config sensitivity tests live in `test/` and cover data fetching, processing logic, scoring functions, UI helpers, and config parameter behaviors.
+
+```bash
+make test          # all 56 tests (~3s)
+make coverage      # tests with line-by-line coverage report
+```
+
+Config sensitivity tests (`test/test_config_sensitivity.py`) load real MA147 hindcast data via OPeNDAP and verify that config parameter changes produce expected directional effects on scores (e.g. raising `hs_min_m` lowers average swell scores, wider `sigma` makes tide scoring more tolerant).
+
+---
+
+## Config Tuning
+
+The `simulations/config_tuning.ipynb` notebook provides an interactive environment for experimenting with config parameter values against real hindcast data.
+
+It loads the MA147 hindcast, auto-selects representative days spanning a range of conditions (biggest/smallest swell, longest/shortest period, cleanest/messiest spread, plus median days), and produces side-by-side comparison tables showing baseline vs experiment scores. Separate sections cover swell scoring, wind penalties, tide penalties, and combined effects.
 
 ---
 
@@ -83,22 +106,30 @@ make ui
 bolinas-surf-forecast/
 ├── .github/
 │   └── workflows/
-│       └── update_forecast.yml   # GitHub Actions: runs pipeline 4x daily
+│       └── update_forecast.yml       # GitHub Actions: runs pipeline 4x daily
 ├── config/
-│   └── surf_config.yaml          # All model parameters, thresholds, and data source config
+│   └── surf_config.yaml              # All model parameters and data source config
 ├── data/
-│   ├── forecast_df.parquet       # Latest forecast output (auto-committed by CI)
-│   └── user_feedback.csv         # Crowd-sourced observed condition reports
+│   ├── forecast_df.parquet           # Latest forecast output (auto-committed by CI)
+│   └── user_feedback.csv             # Crowd-sourced observed condition reports
+├── simulations/
+│   └── config_tuning.ipynb           # Interactive config tuning notebook
 ├── src/
-│   ├── fetch_data.py             # Data fetchers: WW3, CDIP MOP, tides, wind, sunrise/sunset
-│   ├── process_data.py           # Spectral scoring, surf height prediction, wind/tide penalties
-│   ├── reference_functions.py    # Shared utilities (status logging, WW3 grid lookup)
-│   ├── run_surf_app.py           # Pipeline entry point: fetch -> process -> save parquet
-│   ├── surf_app_streamlit.py     # Streamlit dashboard UI
+│   ├── fetch_data.py                 # Data fetchers: WW3, CDIP MOP, tides, wind, sun
+│   ├── process_data.py               # Spectral scoring, surf height, wind/tide penalties
+│   ├── reference_functions.py        # Shared utilities (status logging, WW3 grid lookup)
+│   ├── run_surf_app.py               # Pipeline entry point: fetch -> process -> save
+│   ├── surf_app_streamlit.py         # Streamlit dashboard UI
 │   └── __init__.py
+├── test/
+│   ├── test_fetch_data.py            # Unit tests for data fetching
+│   ├── test_process_data.py          # Unit tests for scoring and processing logic
+│   ├── test_config_sensitivity.py    # Config sensitivity tests (uses CDIP hindcast)
+│   ├── test_surf_app_streamlit.py    # Unit tests for UI helper functions
+│   └── test_run_surf_app.py          # Notes on pipeline entry point coverage
 ├── Makefile
-├── requirements.txt              # Streamlit app dependencies
-├── requirements-pipeline.txt     # Full pipeline dependencies (used by CI)
+├── requirements.txt                  # Streamlit app dependencies
+├── requirements-pipeline.txt         # Full pipeline dependencies (used by CI)
 ├── LICENSE
 └── README.md
 ```

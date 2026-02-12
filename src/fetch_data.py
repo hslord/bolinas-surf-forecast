@@ -179,7 +179,7 @@ def fetch_cdip_mop_forecast(mop_number, min_swell_frequency, forecast_model="ecm
         # Filter to swell band (periods > 10s, i.e. frequencies < 0.1 Hz)
         fc_swell = fc_swell.sel(
             waveFrequency=fc_swell.waveFrequency[
-                fc_swell.waveFrequency < min_swell_frequency
+                fc_swell.waveFrequency <= min_swell_frequency
             ]
         )
 

@@ -210,7 +210,7 @@ summary_card(
 st.subheader("🏆 Best Upcoming Sessions")
 
 # 1. User Input for filtering
-min_score = st.slider("Minimum Surf Score to include:", 1.0, 10.0, 5.0, step=0.5)
+min_score = st.slider("Minimum Surf Score to include:", 1.0, 10.0, 6.0, step=0.5)
 
 # 2. Filter for daylight and user's score threshold
 good_windows = forecast_df[
@@ -230,7 +230,8 @@ if not good_windows.empty:
             "Surf Score (1-10)": "max",
             "Surf Height Min (ft)": "mean",
             "Surf Height Max (ft)": "mean",
-            "Wind": "first",  # Show the wind at the start of the session
+            "Wind Speed (MPH)": ["min", "max"],
+            "Wind Direction": "first",
             "Dominant": "first",
             "Secondary": "first",
             "Tide (ft)": "first",
@@ -244,11 +245,23 @@ if not good_windows.empty:
         "max_score",
         "surf_min",
         "surf_max",
-        "wind",
+        "wind_speed_min",
+        "wind_speed_max",
+        "wind_direction",
         "dom_swell",
         "sec_swell",
         "tide",
     ]
+
+    def format_wind_range(row):
+        w_min = round(row["wind_speed_min"])
+        w_max = round(row["wind_speed_max"])
+        w_direction = row["wind_direction"]
+        if w_min == w_max:
+            return f"{w_min} {w_direction}"
+        return f"{w_min}–{w_max} {w_direction}"
+
+    sessions["wind_range"] = sessions.apply(format_wind_range, axis=1)
 
     # Calculate Duration
     # a window from 8am to 10am actually represents the 8-9, 9-10, and 10-11 blocks
@@ -285,7 +298,7 @@ if not good_windows.empty:
                 "Length",
                 "max_score",
                 "Surf (ft)",
-                "wind",
+                "wind_range",
                 "dom_swell",
                 "sec_swell",
                 "tide",
@@ -296,7 +309,7 @@ if not good_windows.empty:
             "Length": "Length",
             "max_score": "Peak Score",
             "Surf (ft)": "Avg Size (ft)",
-            "wind": "Start Wind",
+            "wind_range": "Wind Range (MPH)",
             "dom_swell": "Dominant Swell",
             "sec_swell": "Secondary Swell",
             "tide": "Start Tide",
@@ -647,7 +660,7 @@ with tab1:
 with tab2:
     st.altair_chart(
         alt_chart(
-            unfiltered, "Surf Height Max (ft)", "Surf Height (ft)", domain=[0, 6]
+            unfiltered, "Surf Height Max (ft)", "Surf Height (ft)", domain=[0, 8]
         ),
         use_container_width=True,
     )

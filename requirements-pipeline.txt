@@ -6,9 +6,9 @@ noaa-coops
 requests
 pytz
 pyyaml
-scikit-learn
 pyarrow
 streamlit
-matplotlib
-seaborn
-scipy
+pytest
+pytest-cov
+black
+pylint

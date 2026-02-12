@@ -83,7 +83,7 @@ def expand_timeseries_data(df: pd.DataFrame, freq="h", limit=6):
     # Handle Partitioning (Swell 1, 2, 3) vs Flat Data
     if "swell_idx" in df.columns:
         expanded = df.groupby("swell_idx", group_keys=False).apply(
-            lambda g: g.reindex(full_index)
+            lambda g: g.reindex(full_index), include_groups=False
         )
     else:
         expanded = df.reindex(full_index)

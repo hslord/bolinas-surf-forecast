@@ -13,8 +13,6 @@ st.title("🌊 Bolinas Surf Forecast")
 # GLOBAL PATHS
 # =======================================================================================
 BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_PATH = BASE_DIR / "data" / "forecast_df.parquet"
-CONFIG_PATH = BASE_DIR / "config" / "surf_config.yaml"
 FEEDBACK_FILE = BASE_DIR / "data" / "user_feedback.csv"
 
 
@@ -23,12 +21,14 @@ FEEDBACK_FILE = BASE_DIR / "data" / "user_feedback.csv"
 # =======================================================================================
 @st.cache_data(ttl=3600, show_spinner=True)
 def load_forecast():
+    base_dir = Path(__file__).resolve().parents[1]
+    parquet_path = base_dir / "data" / "forecast_df.parquet"
 
-    if not DATA_PATH.exists():
-        st.error(f"Parquet file not found at: {DATA_PATH}")
+    if not parquet_path.exists():
+        st.error(f"Parquet file not found at: {parquet_path}")
         st.stop()
 
-    return pd.read_parquet(DATA_PATH)
+    return pd.read_parquet(parquet_path)
 
 
 forecast_df = load_forecast()
@@ -38,7 +38,9 @@ if not isinstance(forecast_df.index, pd.DatetimeIndex):
 
 @st.cache_data
 def load_config():
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+    base_dir = Path(__file__).resolve().parents[1]
+    config_path = base_dir / "config" / "surf_config.yaml"
+    with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -200,7 +202,7 @@ summary_card(
     "Latest Surf",
     f"{current['Surf Height Min (ft)']}–{current['Surf Height Max (ft)']} ft",
 )
-mtime = os.path.getmtime(DATA_PATH)
+mtime = os.path.getmtime(BASE_DIR / "data" / "forecast_df.parquet")
 last_updated_dt = datetime.fromtimestamp(mtime)
 st.caption(f"Last updated: {last_updated_dt.strftime('%b %d, %I:%M %p')}")
 

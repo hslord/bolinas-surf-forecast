@@ -1,8 +1,8 @@
 # IMPORTS
 import xarray as xr
-import pandas as pd
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import numpy as np
 
 pacific = ZoneInfo("America/Los_Angeles")
 

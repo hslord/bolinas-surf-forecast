@@ -48,9 +48,10 @@ surf_model:
       spread_min_deg: 5.0    # "Ideal" narrow spread (lower = cleaner)
       spread_max_deg: 30.0   # Spread above this is considered disorganized/junk
       
-      # Weighting Exponents
-      # Higher = more aggressive penalty for poor conditions
-      spread_weight: 0.3     # Dampens the impact of spread (0.3 is gentle)
+      # Weighting
+      w_hs: 0.40  # Height
+      w_tp: 0.40  # Period 
+      w_sp: 0.20  # Spread 
 
   # ---- UI Labels (Used for display only) ----
   ui_ranges:
@@ -68,10 +69,8 @@ surf_model:
 # === Tide scoring ===
   tide:
     optimal_height: 1.0       # The perfect tide height in feet MLLW (center of Gaussian)
-    sigma: 3.0                # The width of the curve; larger = more tide-tolerant break
-    penalty_min: 0.25         # The lowest possible multiplier (even in a deep high tide)
-    gate_threshold: 0.85      # Raw score must be below this to start penalizing
-    gate_exponent: 1.0       # Steepness of penalty (1.0=linear, 2.0=cliff)
+    sigma: 2.5                # The width of the curve; larger = more tide-tolerant break
+    penalty_min: 0.1         # The lowest possible multiplier (even in a deep high tide)
 
   # === Wind categorization ===
   wind:
@@ -80,10 +79,14 @@ surf_model:
     # Directional impact on Effective Speed
     # Lower value = wind speed is penalized LESS (offshore)
     offshore_penalty_weight: 0.7  
-    crosshore_penalty_weight: 0.85
+    crosshore_penalty_weight: 0.9
     onshore_penalty_weight: 1.0
-    speed_floor: 5.0          # Wind speed below this has 0 penalty (glassy)
-    speed_range: 15.0         # The divisor; how many mph it takes to go from glass to blown out
+    gust_weight: 0.5         # 0.5 means the gust and steady wind are equally important
+    speed_floor: 4.0          # Wind speed below this has 0 penalty (glassy)
+    speed_range: 8.0         # The divisor; how many mph it takes to go from glass to blown out
     penalty_min: 0.25          # The lowest possible multiplier (blown out)
-    gate_threshold: 0.80      # Raw score must be below this to start penalizing
-    gate_exponent: 1.0        # Steepness of penalty (1.0=linear, 2.0=cliff)
+
+  final_scoring:
+    wind_impact_weight: 0.60   # Max reduction from wind
+    tide_impact_weight: 0.60   # Max reduction from tide
+    min_multiplier: 0.20       # Absolute floor

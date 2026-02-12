@@ -12,6 +12,7 @@ from reference_functions import status
 
 pacific = ZoneInfo("America/Los_Angeles")
 
+
 def fetch_ww3_timeseries(
     lat_valid: float,
     lon_valid: float,
@@ -41,8 +42,6 @@ def fetch_ww3_timeseries(
 
     if "time" not in ds.coords:
         raise RuntimeError("WW3 dataset missing forecast-valid 'time' coordinate")
-
-    timename = "time"
 
     # Longitude convention handling
     lon_coord = ds[lonname]
@@ -144,47 +143,55 @@ def fetch_ww3_timeseries(
 
     return df
 
-def fetch_cdip_mop_forecast(mop_number, min_swell_frequency, forecast_model='ecmwf'):
+
+def fetch_cdip_mop_forecast(mop_number, min_swell_frequency, forecast_model="ecmwf"):
     """
-        Fetch alongshore swell forecast data from CDIP MOP THREDDS servers
-        and filter by frequency to isolate surfable period swell.
+    Extract a partitioned WW3 swell timeseries at a validated grid point
+    and align variables to a unified forecast-valid time axis.
 
-        Parameters
-        ----------
-        mop_number : str or int
-            CDIP Monitoring and Prediction (MOP) identifier (e.g., 'MA147').
-        min_swell_frequency : float
-            The upper frequency bound (Hz) for filtering. Only frequencies 
-            below this value are kept (e.g., 0.1 Hz corresponds to 10s period).
-        forecast_model : {'ecmwf', 'ncep'}, optional
-            The atmospheric model used for the wave forecast. 
-            Default is 'ecmwf'.
+    Parameters
+    ----------
+    lat_valid : float
+        The validated latitude of the grid point to sample.
+    lon_valid : float
+        The validated longitude of the grid point to sample.
+    max_partitions : int
+        The number of swell partitions to extract (ordered by wave height).
+    forecast_hours : int
+        The number of hours from the current time to include in the forecast.
+    url : str
+        The OPeNDAP or local NetCDF URL for the WAVEWATCH III dataset.
 
-        Returns
-        -------
-        xarray.Dataset
-            Filtered wave data containing frequency-dependent variables 
-            like wave energy density and direction, indexed by time and frequency.
+    Returns
+    -------
+    pandas.DataFrame
+        Long-form dataframe containing partitioned swell data, indexed by
+        Pacific time. Columns include 'swell_idx' (partition ID), 'Hs_m'
+        (significant height), 'Tp_s' (peak period), and 'Dir_deg' (direction).
     """
     status(f"Fetching swell forecast for MOP {mop_number}...")
     # MOP THREDDS OPeNDAP
-    if forecast_model == 'ncep':
+    if forecast_model == "ncep":
         fc_url = (
             "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
             f"cdip/model/MOP_alongshore/{mop_number}_forecast.nc"
         )
     else:
         fc_url = (
-        "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
-        f"cdip/model/MOP_alongshore/{mop_number}_ecmwf_fc.nc"
+            "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
+            f"cdip/model/MOP_alongshore/{mop_number}_ecmwf_fc.nc"
         )
 
-    fc_swell = xr.open_dataset(fc_url, engine='netcdf4')
+    fc_swell = xr.open_dataset(fc_url, engine="netcdf4")
 
     # Filter to swell band (periods > 10s, i.e. frequencies < 0.1 Hz)
-    fc_swell = fc_swell.sel(waveFrequency=fc_swell.waveFrequency[fc_swell.waveFrequency < min_swell_frequency])
+    fc_swell = fc_swell.sel(
+        waveFrequency=fc_swell.waveFrequency[
+            fc_swell.waveFrequency < min_swell_frequency
+        ]
+    )
 
-    status(f"Retrieved swell forecast.")
+    status("Retrieved swell forecast.")
 
     return fc_swell
 
@@ -240,7 +247,7 @@ def fetch_tide_predictions(station_id: str, days: int = 14):
     return df
 
 
-def fetch_wind_forecast(lat: float, lon: float):
+def fetch_wind_forecast(lat: float, lon: float, days: int = 14):
     """
     Fetch wind forecast from Open-Meteo (hourly) with sustained wind and gusts.
     Uses 'best_match' to ensure a full 7-day forecast without gaps.
@@ -265,7 +272,8 @@ def fetch_wind_forecast(lat: float, lon: float):
         f"latitude={lat}&longitude={lon}&"
         f"hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m&"
         f"wind_speed_unit=mph&"
-        f"timezone=America/Los_Angeles"
+        f"timezone=America/Los_Angeles&"
+        f"forecast_days={days}"
     )
 
     try:
@@ -428,12 +436,13 @@ def fetch_data_wrapper(data_sources: Dict):
     )
 
     # shallow water (15M) mop forecast
-    safe_fetch("cdip_mop",
-                fetch_cdip_mop_forecast,
-                 data_sources["mop_number"], 
-                 data_sources["min_swell_frequency"], 
-                 data_sources["forecast_model"]
-                )
+    safe_fetch(
+        "cdip_mop",
+        fetch_cdip_mop_forecast,
+        data_sources["mop_number"],
+        data_sources["min_swell_frequency"],
+        data_sources["forecast_model"],
+    )
 
     # tides
     safe_fetch("tide", fetch_tide_predictions, data_sources["tide_station"])

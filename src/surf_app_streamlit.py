@@ -3,7 +3,6 @@ import pandas as pd
 import altair as alt
 from pathlib import Path
 import yaml
-import numpy as np
 import os
 from datetime import datetime
 
@@ -125,8 +124,7 @@ forecast_df["Secondary"] = (
 forecast_df["Wind"] = (
     forecast_df["Wind Speed (MPH)"].fillna(0).round(0).astype(int).astype(str)
     + "g"
-    +
-    forecast_df["Wind Gust (MPH)"].fillna(0).round(0).astype(int).astype(str)
+    + forecast_df["Wind Gust (MPH)"].fillna(0).round(0).astype(int).astype(str)
     + " "
     + forecast_df["Wind Direction"].astype(str)
 )
@@ -180,7 +178,6 @@ def summary_card(column, title, value, color="inherit", help_text=None):
             unsafe_allow_html=True,
             help=help_text,
         )
-
 
 
 # 3. Render Cards
@@ -476,12 +473,14 @@ with st.expander("How are these scores calculated?"):
     swell_help = " • ".join(swell_notes)
 
     # 2. Render the Markdown
-    st.write(f"""
+    st.write(
+        f"""
     - **Swell:** Optimized for propagation from:  
       {swell_help}
     - **Wind:** Optimized for offshore flow relative to the coast orientation of **{config["data_sources"]["coast_orientation"]}°**.
     - **Tide:** The "Tide Score" is highest when the height is between **-1 and 3 ft**.
-    """)
+    """
+    )
 
 # =======================================================================================
 # TIME SERIES EXPLORER
@@ -581,7 +580,7 @@ def alt_wind_with_gusts(df):
             y=alt.Y(
                 "Wind Speed (MPH):Q",
                 title="Wind Speed (mph)",
-                scale=alt.Scale(domain=[0, 30]),
+                scale=alt.Scale(domain=[0, 40]),
             ),
             tooltip=[
                 alt.Tooltip("datetime:T", title="Time"),
@@ -680,21 +679,36 @@ st.info("Your feedback helps tune the Bolinas Surf Forecast.")
 
 with st.form("surf_report_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
-    
+
     with col1:
-        observed_min = st.number_input("Observed Min Height (ft)", min_value=0.0, max_value=20.0, value=2.0, step=0.5)
+        observed_min = st.number_input(
+            "Observed Min Height (ft)",
+            min_value=0.0,
+            max_value=20.0,
+            value=2.0,
+            step=0.5,
+        )
     with col2:
-        observed_max = st.number_input("Observed Max Height (ft)", min_value=0.0, max_value=20.0, value=3.0, step=0.5)
-        
+        observed_max = st.number_input(
+            "Observed Max Height (ft)",
+            min_value=0.0,
+            max_value=20.0,
+            value=3.0,
+            step=0.5,
+        )
+
     user_score = st.select_slider(
-        "Overall Session Score (1-10)", 
-        options=range(1, 11), 
+        "Overall Session Score (1-10)",
+        options=range(1, 11),
         value=5,
-        help="How good was the actual surf quality?"
+        help="How good was the actual surf quality?",
     )
-    
-    comments = st.text_area("Freeform Feedback", placeholder="e.g. 'Closing out on the sets' or 'Wind stayed offshore longer than predicted'")
-    
+
+    comments = st.text_area(
+        "Freeform Feedback",
+        placeholder="e.g. 'Closing out on the sets' or 'Wind stayed offshore longer than predicted'",
+    )
+
     submitted = st.form_submit_button("Submit Report")
 
     if submitted:
@@ -703,13 +717,13 @@ with st.form("surf_report_form", clear_on_submit=True):
             "obs_min": observed_min,
             "obs_max": observed_max,
             "user_score": user_score,
-            "comments": comments.replace(",", ";")
+            "comments": comments.replace(",", ";"),
         }
-        
+
         df = pd.DataFrame([new_entry])
-        
+
         # Append to the file in the ../data/ folder
         file_exists = os.path.isfile(FEEDBACK_FILE)
-        df.to_csv(FEEDBACK_FILE, mode='a', index=False, header=not file_exists)
-        
-        st.success(f"Thank you for your feedback!")
+        df.to_csv(FEEDBACK_FILE, mode="a", index=False, header=not file_exists)
+
+        st.success("Thank you for your feedback!")

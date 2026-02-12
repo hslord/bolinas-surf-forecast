@@ -181,6 +181,13 @@ def compute_swell_score(ds_swell, surf_model):
     # config
     spectral_cfg = surf_model["spectral_scoring"]
 
+    # Validate that scoring weights sum to ~1.0
+    weight_sum = spectral_cfg["w_hs"] + spectral_cfg["w_tp"] + spectral_cfg["w_sp"]
+    if not np.isclose(weight_sum, 1.0, atol=0.01):
+        raise ValueError(
+            f"Spectral scoring weights must sum to 1.0, got {weight_sum:.3f}"
+        )
+
     # sqrt curve: ramp up
     hs_range = spectral_cfg["hs_full_credit_m"] - spectral_cfg["hs_min_m"]
     hs_score = np.sqrt(np.clip((hs_swell - spectral_cfg["hs_min_m"]) / hs_range, 0, 1))
@@ -323,7 +330,7 @@ def calculate_surf_score(
         "onshore": w_cfg["onshore_penalty_weight"],
     }
     # don't penalize scores if wind is null
-    if pd.isna(wind_speed) or wind_category is np.nan:
+    if pd.isna(wind_speed) or pd.isna(wind_category):
         wind_score = np.nan
         w_penalty = 1.0
     else:
@@ -387,7 +394,9 @@ def calculate_surf_score(
     raw_final = swell_score * final_multiplier
 
     # But final_score cannot be less than the lowest of any individual score
-    lowest_individual_score = min(swell_score, wind_score, tide_score)
+    lowest_individual_score = min(
+        s for s in (swell_score, wind_score, tide_score) if not pd.isna(s)
+    )
     final_score = max(raw_final, lowest_individual_score)
 
     return (

@@ -50,13 +50,14 @@ def load_forecast():
     return df
 
 
-forecast_df = load_forecast()
+if __name__ == "__main__":
+    forecast_df = load_forecast()
 
-if forecast_df is not None:
-    DATA_DIR.mkdir(exist_ok=True)
-    # Use the standardized Parquet format for the cloud
-    output_path = DATA_DIR / "forecast_df.parquet"
-    forecast_df.to_parquet(output_path)
-    status(f"SUCCESS: Forecast saved to {output_path}")
-else:
-    status("FAILED: Forecast was not generated.")
+    if forecast_df is not None:
+        DATA_DIR.mkdir(exist_ok=True)
+        # Use the standardized Parquet format for the cloud
+        output_path = DATA_DIR / "forecast_df.parquet"
+        forecast_df.to_parquet(output_path)
+        status(f"SUCCESS: Forecast saved to {output_path}")
+    else:
+        status("FAILED: Forecast was not generated.")

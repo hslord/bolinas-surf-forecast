@@ -35,7 +35,7 @@ def get_score_color(val):
         r, g, b = (
             int(231 + f * (241 - 231)),
             int(76 + f * (196 - 76)),
-            int(15 + f * (113 - 15)),
+            int(60 + f * (15 - 60)),
         )
     else:
         f = (score - 5) / 5

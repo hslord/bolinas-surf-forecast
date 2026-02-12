@@ -12,6 +12,19 @@ from reference_functions import status
 pacific = ZoneInfo("America/Los_Angeles")
 
 
+def _retry(func, retries=3, delay=2, backoff=2):
+    """Retry a function with exponential backoff."""
+    for attempt in range(retries):
+        try:
+            return func()
+        except (requests.RequestException, OSError):
+            if attempt == retries - 1:
+                raise
+            status(f"Retry {attempt + 1}/{retries} after {delay}s...")
+            time.sleep(delay)
+            delay *= backoff
+
+
 def fetch_ww3_timeseries(
     lat_valid: float,
     lon_valid: float,
@@ -136,28 +149,28 @@ def fetch_ww3_timeseries(
 
 def fetch_cdip_mop_forecast(mop_number, min_swell_frequency, forecast_model="ecmwf"):
     """
-    Extract a partitioned WW3 swell timeseries at a validated grid point
-    and align variables to a unified forecast-valid time axis.
+    Fetch the CDIP MOP spectral wave forecast for a nearshore output point.
+
+    Connects to the CDIP THREDDS OPeNDAP server, selects the appropriate
+    forecast model (ECMWF or NCEP), and filters to the swell frequency band.
 
     Parameters
     ----------
-    lat_valid : float
-        The validated latitude of the grid point to sample.
-    lon_valid : float
-        The validated longitude of the grid point to sample.
-    max_partitions : int
-        The number of swell partitions to extract (ordered by wave height).
-    forecast_hours : int
-        The number of hours from the current time to include in the forecast.
-    url : str
-        The OPeNDAP or local NetCDF URL for the WAVEWATCH III dataset.
+    mop_number : str
+        MOP station identifier (e.g., 'MA147').
+    min_swell_frequency : float
+        Maximum frequency (Hz) to include in the swell band filter.
+        Frequencies above this threshold are excluded.
+    forecast_model : str, optional
+        Which global wave model drives the MOP forecast boundary conditions.
+        'ecmwf' (default) uses ECMWF HRES-WAM; 'ncep' uses NCEP WW3.
 
     Returns
     -------
-    pandas.DataFrame
-        Long-form dataframe containing partitioned swell data, indexed by
-        Pacific time. Columns include 'swell_idx' (partition ID), 'Hs_m'
-        (significant height), 'Tp_s' (peak period), and 'Dir_deg' (direction).
+    xarray.Dataset
+        Swell-filtered MOP spectral dataset containing energy density,
+        Fourier directional coefficients (a1, b1), bandwidth, and
+        peak direction for each forecast timestep.
     """
     status(f"Fetching swell forecast for MOP {mop_number}...")
 
@@ -286,9 +299,13 @@ def fetch_wind_forecast(lat: float, lon: float, days: int = 14):
     )
 
     try:
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+
+        def _fetch_wind():
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+
+        data = _retry(_fetch_wind)
 
         hourly = data["hourly"]
 
@@ -302,13 +319,9 @@ def fetch_wind_forecast(lat: float, lon: float, days: int = 14):
             }
         )
 
-        # Clean up: Localize to Pacific, then remove TZ
-        df["datetime"] = (
-            df["datetime"]
-            .dt.tz_localize("UTC")
-            .dt.tz_convert(pacific)
-            .dt.tz_localize(None)
-        )
+        # Open-Meteo returns Pacific times (timezone=America/Los_Angeles).
+        # Just ensure they are tz-naive for consistency with the rest of the pipeline.
+        df["datetime"] = pd.to_datetime(df["datetime"])
         df = df.set_index("datetime").sort_index()
 
         # Physical sanity check: gusts must be >= speed
@@ -359,9 +372,12 @@ def fetch_sunrise_sunset(lat: float, lon: float, days: int = 14):
             date = start_date + timedelta(days=i)
             url = f"https://api.sunrise-sunset.org/json?lat={lat}&lng={lon}&date={date}&formatted=0"
 
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
-            data = response.json()
+            def _fetch_sun(_url=url):
+                resp = requests.get(_url, timeout=30)
+                resp.raise_for_status()
+                return resp.json()
+
+            data = _retry(_fetch_sun, retries=2, delay=1)
 
             sunrise = (
                 pd.to_datetime(data["results"]["sunrise"], utc=True)

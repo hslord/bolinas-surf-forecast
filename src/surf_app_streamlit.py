@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 import os
 from datetime import datetime
+import numpy as np
 
 st.title("🌊 Bolinas Surf Forecast")
 
@@ -88,6 +89,17 @@ def get_score_color(val):
             int(15 + f * (113 - 15)),
         )
     return f"rgb({r}, {g}, {b})"
+
+
+def circular_mean_deg(series):
+    """Compute mean of compass directions using vector averaging."""
+    rads = np.deg2rad(series.dropna())
+    if len(rads) == 0:
+        return np.nan
+    return np.rad2deg(np.arctan2(np.sin(rads).mean(), np.cos(rads).mean())) % 360
+
+
+circular_mean_deg.__name__ = "mean"
 
 
 # This is the specific version for pandas .style (tables)
@@ -303,7 +315,7 @@ if not good_windows.empty:
                 "sec_swell",
                 "tide",
             ]
-        ].style.applymap(style_surf_score, subset=["max_score"]),
+        ].style.map(style_surf_score, subset=["max_score"]),
         column_config={
             "Window": "Time Block",
             "Length": "Length",
@@ -337,10 +349,10 @@ daily_summary = daylight_df.groupby("Date").agg(
         "Surf Height Max (ft)": "max",
         "Dominant Swell Period": "mean",
         "Dominant Swell Size (ft)": "mean",
-        "Dominant Swell Direction": "mean",
+        "Dominant Swell Direction": circular_mean_deg,
         "Secondary Swell Period": "mean",
         "Secondary Swell Size (ft)": "mean",
-        "Secondary Swell Direction": "mean",
+        "Secondary Swell Direction": circular_mean_deg,
         "Wind Speed (MPH)": ["min", "max"],
     }
 )
@@ -420,7 +432,7 @@ display_df.columns = [
 ]
 
 st.dataframe(
-    display_df.style.applymap(style_surf_score, subset=["Max Surf Score"]),
+    display_df.style.map(style_surf_score, subset=["Max Surf Score"]),
     use_container_width=True,
 )
 

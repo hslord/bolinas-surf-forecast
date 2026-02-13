@@ -1,6 +1,6 @@
 streamlit==1.45.1
-pandas
-numpy
-altair
-PyYAML
-st-gsheets-connection
+pandas==2.2.3
+numpy==2.1.3
+altair==5.5.0
+PyYAML==6.0.2
+st-gsheets-connection==0.1.0

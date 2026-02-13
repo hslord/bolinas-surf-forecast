@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import numpy as np
 from streamlit_gsheets import GSheetsConnection
 
@@ -14,6 +15,7 @@ st.title("🌊 Bolinas Surf Forecast")
 # DATA LOADING (pkl)
 # =======================================================================================
 base_dir = Path(__file__).resolve().parents[1]
+
 
 @st.cache_data(ttl=3600, show_spinner=True)
 def load_forecast():
@@ -41,7 +43,7 @@ def load_config():
 try:
     config = load_config()
     surf_cfg = config["surf_model"]
-except Exception as e:
+except (KeyError, FileNotFoundError, yaml.YAMLError) as e:
     st.error(f"Config load failed: {type(e).__name__}: {e}")
     st.stop()
 
@@ -201,7 +203,7 @@ summary_card(
     f"{current['Surf Height Min (ft)']}–{current['Surf Height Max (ft)']} ft",
 )
 mtime = os.path.getmtime(base_dir / "data" / "forecast_df.parquet")
-last_updated_dt = datetime.fromtimestamp(mtime)
+last_updated_dt = datetime.fromtimestamp(mtime, tz=ZoneInfo("America/Los_Angeles"))
 st.caption(f"Last updated: {last_updated_dt.strftime('%b %d, %I:%M %p')}")
 
 summary_card(c2, "Latest Score", f"{curr_score}/10", color=get_score_color(curr_score))
@@ -527,7 +529,7 @@ with st.expander("How are these scores calculated?"):
     - **Swell:** Optimized for propagation from:  
       {swell_help}
     - **Wind:** Optimized for offshore flow relative to the coast orientation of **{config["data_sources"]["coast_orientation"]}°**.
-    - **Tide:** The "Tide Score" is highest when the height is between **-1 and 3 ft**.
+    - **Tide:** The "Tide Score" is highest at **1 ft**.
     """
     )
 
@@ -550,20 +552,20 @@ def build_night_rects(light_df):
 
     rects = []
     in_block = False
-    start_time = None
+    block_start = None
 
     for _, row in light_df.iterrows():
         if not row["is_daylight"] and not in_block:
             in_block = True
-            start_time = row["datetime"]
+            block_start = row["datetime"]
 
         if row["is_daylight"] and in_block:
             in_block = False
-            rects.append({"start": start_time, "end": row["datetime"]})
+            rects.append({"start": block_start, "end": row["datetime"]})
 
     # If ending at night
     if in_block:
-        rects.append({"start": start_time, "end": light_df["datetime"].iloc[-1]})
+        rects.append({"start": block_start, "end": light_df["datetime"].iloc[-1]})
 
     return pd.DataFrame(rects)
 
@@ -723,28 +725,36 @@ with st.form("surf_report_form", clear_on_submit=True):
     # Row 1: The Timeline
     report_date = st.date_input("Date", value=datetime.now())
     col_start, col_end = st.columns(2)
-    
+
     with col_start:
         start_time = st.time_input("Start Time", value=datetime.now().time())
-    
+
     with col_end:
         # Defaults to 1 hour later
-        default_end = (datetime.combine(report_date, start_time) + timedelta(hours=1)).time()
+        default_end = (
+            datetime.combine(report_date, start_time) + timedelta(hours=1)
+        ).time()
         end_time = st.time_input("End Time", value=default_end)
 
     # Row 2: The Conditions
     col_min, col_max = st.columns(2)
     with col_min:
-        observed_min = st.number_input("Size Min (ft)", min_value=0.0, value=2.0, step=0.5)
+        observed_min = st.number_input(
+            "Size Min (ft)", min_value=0.0, value=2.0, step=0.5
+        )
     with col_max:
-        observed_max = st.number_input("Size Max (ft)", min_value=0.0, value=3.0, step=0.5)
+        observed_max = st.number_input(
+            "Size Max (ft)", min_value=0.0, value=3.0, step=0.5
+        )
 
     # Row 3: Rating & User
     surf_rating = st.select_slider("Surf Rating (1-10)", options=range(1, 11), value=5)
     user_name = st.text_input("User (Optional)", placeholder="Your Name or Initials")
 
     # Row 4: Qualitative
-    notes = st.text_area("Notes", placeholder="Describe the crowd, wind, or 10s+ swell energy...")
+    notes = st.text_area(
+        "Notes", placeholder="Describe the crowd, wind, or 10s+ swell energy..."
+    )
 
     # The button that finally triggers the rerun
     submitted = st.form_submit_button("Submit Report")
@@ -755,27 +765,32 @@ sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
 if submitted:
     try:
         # Map the form inputs to your GSheet columns
-        new_entry = pd.DataFrame([{
-            "Date": report_date.strftime("%Y-%m-%d"),
-            "Start Time": start_time.strftime("%H:%M"),
-            "End Time": end_time.strftime("%H:%M"),
-            "Size Min": observed_min,
-            "Size Max": observed_max,
-            "Surf Rating (1-10)": surf_rating,
-            "Notes": notes.replace(",", ";"), # Clean notes for CSV/Spreadsheet safety
-            "User": user_name if user_name else "Anonymous"
-        }])
-        # Read the existing sheet 
+        new_entry = pd.DataFrame(
+            [
+                {
+                    "Date": report_date.strftime("%Y-%m-%d"),
+                    "Start Time": start_time.strftime("%H:%M"),
+                    "End Time": end_time.strftime("%H:%M"),
+                    "Size Min": observed_min,
+                    "Size Max": observed_max,
+                    "Surf Rating (1-10)": surf_rating,
+                    "Notes": notes.replace(
+                        ",", ";"
+                    ),  # Clean notes for CSV/Spreadsheet safety
+                    "User": user_name if user_name else "Anonymous",
+                }
+            ]
+        )
+        # Read the existing sheet
         existing_data = conn.read(spreadsheet=sheet_url, worksheet="Sheet1")
-        
+
         # Combine the old data with the new entry
         updated_df = pd.concat([existing_data, new_entry], ignore_index=True)
-        
+
         # Push the updated dataframe back to Google
         conn.update(spreadsheet=sheet_url, worksheet="Sheet1", data=updated_df)
-        
+
         st.success("Thank you for your feedback!")
-    
-    except Exception as e:
+
+    except (KeyError, ValueError, ConnectionError) as e:
         st.error(f"Something went wrong: {e}")
-        

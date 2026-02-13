@@ -7,7 +7,7 @@ SIM_DIR   = simulations
 APP_MAIN  = $(SRC_DIR)/run_surf_app.py
 APP_UI    = $(SRC_DIR)/surf_app_streamlit.py
 
-.PHONY: help run ui install lint format test test-all coverage clean
+.PHONY: help run ui install lint format test coverage clean
 
 help:
 	@echo "Usage:"
@@ -15,14 +15,13 @@ help:
 	@echo "  make run      - Run the data fetch and processing pipeline"
 	@echo "  make ui       - Launch the Streamlit interactive dashboard"
 	@echo "  make test     - Run unit tests (offline only)"
-	@echo "  make test-all - Run all tests including slow network tests"
 	@echo "  make coverage - Run tests with coverage report"
 	@echo "  make lint     - Run Pylint with Bolinas custom settings"
 	@echo "  make format   - Auto-format code using Black"
 	@echo "  make clean    - Remove cache and temporary files"
 
 install:
-	pip install --upgrade pip && pip install -r requirements-pipeline.txt
+	pip install --upgrade pip && pip install -r requirements.txt -r requirements-pipeline.txt
 
 run:
 	$(PYTHON) $(APP_MAIN)

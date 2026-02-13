@@ -4,24 +4,19 @@ import altair as alt
 from pathlib import Path
 import yaml
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
+from streamlit_gsheets import GSheetsConnection
 
 st.title("🌊 Bolinas Surf Forecast")
 
 # =======================================================================================
-# GLOBAL PATHS
-# =======================================================================================
-BASE_DIR = Path(__file__).resolve().parents[1]
-FEEDBACK_FILE = BASE_DIR / "data" / "user_feedback.csv"
-
-
-# =======================================================================================
 # DATA LOADING (pkl)
 # =======================================================================================
+base_dir = Path(__file__).resolve().parents[1]
+
 @st.cache_data(ttl=3600, show_spinner=True)
 def load_forecast():
-    base_dir = Path(__file__).resolve().parents[1]
     parquet_path = base_dir / "data" / "forecast_df.parquet"
 
     if not parquet_path.exists():
@@ -38,14 +33,17 @@ if not isinstance(forecast_df.index, pd.DatetimeIndex):
 
 @st.cache_data
 def load_config():
-    base_dir = Path(__file__).resolve().parents[1]
     config_path = base_dir / "config" / "surf_config.yaml"
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
-config = load_config()
-surf_cfg = config["surf_model"]
+try:
+    config = load_config()
+    surf_cfg = config["surf_model"]
+except Exception as e:
+    st.error(f"Config load failed: {type(e).__name__}: {e}")
+    st.stop()
 
 # =======================================================================================
 # DATA FORMATTING
@@ -202,7 +200,7 @@ summary_card(
     "Latest Surf",
     f"{current['Surf Height Min (ft)']}–{current['Surf Height Max (ft)']} ft",
 )
-mtime = os.path.getmtime(BASE_DIR / "data" / "forecast_df.parquet")
+mtime = os.path.getmtime(base_dir / "data" / "forecast_df.parquet")
 last_updated_dt = datetime.fromtimestamp(mtime)
 st.caption(f"Last updated: {last_updated_dt.strftime('%b %d, %I:%M %p')}")
 
@@ -714,56 +712,70 @@ st.download_button(
     mime="text/csv",
 )
 
+# =======================================================================================
+# FEEDBACK
+# =======================================================================================
+
 st.subheader("Report Live Conditions")
 st.info("Your feedback helps tune the Bolinas Surf Forecast.")
 
 with st.form("surf_report_form", clear_on_submit=True):
-    col1, col2 = st.columns(2)
+    # Row 1: The Timeline
+    report_date = st.date_input("Date", value=datetime.now())
+    col_start, col_end = st.columns(2)
+    
+    with col_start:
+        start_time = st.time_input("Start Time", value=datetime.now().time())
+    
+    with col_end:
+        # Defaults to 1 hour later
+        default_end = (datetime.combine(report_date, start_time) + timedelta(hours=1)).time()
+        end_time = st.time_input("End Time", value=default_end)
 
-    with col1:
-        observed_min = st.number_input(
-            "Observed Min Height (ft)",
-            min_value=0.0,
-            max_value=20.0,
-            value=2.0,
-            step=0.5,
-        )
-    with col2:
-        observed_max = st.number_input(
-            "Observed Max Height (ft)",
-            min_value=0.0,
-            max_value=20.0,
-            value=3.0,
-            step=0.5,
-        )
+    # Row 2: The Conditions
+    col_min, col_max = st.columns(2)
+    with col_min:
+        observed_min = st.number_input("Size Min (ft)", min_value=0.0, value=2.0, step=0.5)
+    with col_max:
+        observed_max = st.number_input("Size Max (ft)", min_value=0.0, value=3.0, step=0.5)
 
-    user_score = st.select_slider(
-        "Overall Session Score (1-10)",
-        options=range(1, 11),
-        value=5,
-        help="How good was the actual surf quality?",
-    )
+    # Row 3: Rating & User
+    surf_rating = st.select_slider("Surf Rating (1-10)", options=range(1, 11), value=5)
+    user_name = st.text_input("User (Optional)", placeholder="Your Name or Initials")
 
-    comments = st.text_area(
-        "Freeform Feedback",
-        placeholder="e.g. 'Closing out on the sets' or 'Wind stayed offshore longer than predicted'",
-    )
+    # Row 4: Qualitative
+    notes = st.text_area("Notes", placeholder="Describe the crowd, wind, or 10s+ swell energy...")
 
+    # The button that finally triggers the rerun
     submitted = st.form_submit_button("Submit Report")
+# The sheet
+conn = st.connection("gsheets", type=GSheetsConnection)
+sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
 
-    if submitted:
-        new_entry = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "obs_min": observed_min,
-            "obs_max": observed_max,
-            "user_score": user_score,
-            "comments": comments.replace(",", ";"),
-        }
-
-        df = pd.DataFrame([new_entry])
-
-        # Append to the file in the ../data/ folder
-        file_exists = os.path.isfile(FEEDBACK_FILE)
-        df.to_csv(FEEDBACK_FILE, mode="a", index=False, header=not file_exists)
-
+if submitted:
+    try:
+        # Map the form inputs to your GSheet columns
+        new_entry = pd.DataFrame([{
+            "Date": report_date.strftime("%Y-%m-%d"),
+            "Start Time": start_time.strftime("%H:%M"),
+            "End Time": end_time.strftime("%H:%M"),
+            "Size Min": observed_min,
+            "Size Max": observed_max,
+            "Surf Rating (1-10)": surf_rating,
+            "Notes": notes.replace(",", ";"), # Clean notes for CSV/Spreadsheet safety
+            "User": user_name if user_name else "Anonymous"
+        }])
+        # Read the existing sheet 
+        existing_data = conn.read(spreadsheet=sheet_url, worksheet="Sheet1")
+        
+        # Combine the old data with the new entry
+        updated_df = pd.concat([existing_data, new_entry], ignore_index=True)
+        
+        # Push the updated dataframe back to Google
+        conn.update(spreadsheet=sheet_url, worksheet="Sheet1", data=updated_df)
+        
         st.success("Thank you for your feedback!")
+    
+    except Exception as e:
+        st.error(f"Something went wrong: {e}")
+        

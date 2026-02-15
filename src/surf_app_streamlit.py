@@ -242,8 +242,8 @@ if not good_windows.empty:
         {
             "datetime": ["min", "max"],
             "Surf Score (1-10)": "max",
-            "Surf Height Min (ft)": "mean",
-            "Surf Height Max (ft)": "mean",
+            "Surf Height Min (ft)": lambda x: round(x.mean() * 2) / 2,
+            "Surf Height Max (ft)": lambda x: round(x.mean() * 2) / 2,
             "Wind Speed (MPH)": ["min", "max"],
             "Wind Direction": "first",
             "Dominant": "first",

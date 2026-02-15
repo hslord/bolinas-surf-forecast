@@ -155,33 +155,83 @@ def test_bigger_swell_scores_higher(_spectral_config):
 
 @pytest.fixture
 def _nearshore_cfg():
-    return {"range_factor": 0.15, "range_period_min": 12, "range_step": 0.01}
+    return {
+        "range_factor": 0.15,
+        "range_period_min": 12,
+        "range_step": 0.01,
+        "dp_neutral": 215.0,
+        "dp_slope": 0.04,
+        "dp_max_boost": 2.00,
+        "dp_min_factor": 0.80,
+    }
 
 
 def test_surf_height_returns_min_max(_nearshore_cfg):
-    result = predict_bolinas_surf_height(4.0, 14.0, _nearshore_cfg)
+    result = predict_bolinas_surf_height(4.0, 14.0, 215.0, _nearshore_cfg)
     assert "bolinas_surf_min_ft" in result
     assert "bolinas_surf_max_ft" in result
     assert result["bolinas_surf_max_ft"] >= result["bolinas_surf_min_ft"]
 
 
 def test_surf_height_zero_for_flat(_nearshore_cfg):
-    result = predict_bolinas_surf_height(0.0, 10.0, _nearshore_cfg)
+    result = predict_bolinas_surf_height(0.0, 10.0, 215.0, _nearshore_cfg)
     assert result["bolinas_surf_min_ft"] == 0.0
     assert result["bolinas_surf_max_ft"] == 0.0
 
 
 def test_surf_height_nan_input(_nearshore_cfg):
-    result = predict_bolinas_surf_height(np.nan, 14.0, _nearshore_cfg)
+    result = predict_bolinas_surf_height(np.nan, 14.0, 215.0, _nearshore_cfg)
     assert result["bolinas_surf_min_ft"] == 0.0
 
 
 def test_surf_height_longer_period_wider_range(_nearshore_cfg):
-    short = predict_bolinas_surf_height(4.0, 10.0, _nearshore_cfg)
-    long = predict_bolinas_surf_height(4.0, 18.0, _nearshore_cfg)
+    short = predict_bolinas_surf_height(4.0, 10.0, 215.0, _nearshore_cfg)
+    long = predict_bolinas_surf_height(4.0, 18.0, 215.0, _nearshore_cfg)
     short_range = short["bolinas_surf_max_ft"] - short["bolinas_surf_min_ft"]
     long_range = long["bolinas_surf_max_ft"] - long["bolinas_surf_min_ft"]
     assert long_range >= short_range
+
+
+# ── predict_bolinas_surf_height: direction factor tests ──────────────────
+
+
+def test_surf_height_south_swell_boosts(_nearshore_cfg):
+    """More southerly dp (< neutral) should produce taller surf."""
+    neutral = predict_bolinas_surf_height(4.0, 14.0, 215.0, _nearshore_cfg)
+    south = predict_bolinas_surf_height(4.0, 14.0, 190.0, _nearshore_cfg)
+    assert south["bolinas_surf_max_ft"] > neutral["bolinas_surf_max_ft"]
+    assert south["bolinas_surf_min_ft"] >= neutral["bolinas_surf_min_ft"]
+
+
+def test_surf_height_west_swell_reduces(_nearshore_cfg):
+    """More westerly dp (> neutral) should produce shorter surf."""
+    neutral = predict_bolinas_surf_height(4.0, 14.0, 215.0, _nearshore_cfg)
+    west = predict_bolinas_surf_height(4.0, 14.0, 250.0, _nearshore_cfg)
+    assert west["bolinas_surf_max_ft"] < neutral["bolinas_surf_max_ft"]
+
+
+def test_surf_height_dp_factor_clamped_to_max_boost(_nearshore_cfg):
+    """Extremely south dp should be clamped to dp_max_boost, not go infinite."""
+    extreme_south = predict_bolinas_surf_height(4.0, 14.0, 100.0, _nearshore_cfg)
+    very_south = predict_bolinas_surf_height(4.0, 14.0, 150.0, _nearshore_cfg)
+    # With dp_max_boost=2.0 and dp_slope=0.04, dp=100 would give factor=5.6 unclamped
+    # Both should be clamped to the same dp_max_boost
+    assert extreme_south["bolinas_surf_max_ft"] == very_south["bolinas_surf_max_ft"]
+
+
+def test_surf_height_dp_factor_clamped_to_min_factor(_nearshore_cfg):
+    """Extremely west dp should be clamped to dp_min_factor, not go below."""
+    extreme_west = predict_bolinas_surf_height(4.0, 14.0, 350.0, _nearshore_cfg)
+    very_west = predict_bolinas_surf_height(4.0, 14.0, 300.0, _nearshore_cfg)
+    # Both should be clamped to dp_min_factor
+    assert extreme_west["bolinas_surf_max_ft"] == very_west["bolinas_surf_max_ft"]
+
+
+def test_surf_height_dp_nan_input(_nearshore_cfg):
+    """NaN dp should still return zero (handled by the NaN check)."""
+    result = predict_bolinas_surf_height(4.0, 14.0, np.nan, _nearshore_cfg)
+    assert result["bolinas_surf_min_ft"] == 0.0
+    assert result["bolinas_surf_max_ft"] == 0.0
 
 
 # ── calculate_surf_score ─────────────────────────────────────────────────

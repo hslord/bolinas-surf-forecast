@@ -230,6 +230,7 @@ def compute_swell_score(ds_swell, surf_model):
 def predict_bolinas_surf_height(
     height_ft: float,
     period_s: float,
+    dp_deg: float,
     nearshore_cfg: dict,
 ):
     """
@@ -243,6 +244,8 @@ def predict_bolinas_surf_height(
         Nearshore significant wave height (ft) from CDIP MOP.
     period_s : float
         Peak swell period (s).
+    dp_deg : float
+        Peak direction of swell (degrees)
     nearshore_cfg : dict
         Configuration block: surf_model.nearshore
         Keys:
@@ -259,7 +262,7 @@ def predict_bolinas_surf_height(
         }
     """
     # Missing inputs or flat ocean → zero
-    if pd.isna(height_ft) or pd.isna(period_s) or height_ft <= 0:
+    if pd.isna(height_ft) or pd.isna(period_s) or pd.isna(dp_deg) or height_ft <= 0:
         return {
             "bolinas_surf_min_ft": 0.0,
             "bolinas_surf_max_ft": 0.0,
@@ -271,9 +274,15 @@ def predict_bolinas_surf_height(
         * nearshore_cfg["range_step"]
     )
 
+    # Adjust the hight multiplier by degrees - more southerly higher multiplier, northerly lower
+    dp_factor = 1.0 + nearshore_cfg["dp_slope"] * (nearshore_cfg["dp_neutral"] - dp_deg)
+    dp_height_multiplier = np.clip(
+        dp_factor, nearshore_cfg["dp_min_factor"], nearshore_cfg["dp_max_boost"]
+    )
+
     # Apply to height-MOP height as the median expectation
-    h_min = height_ft * (1 - dynamic_rf)
-    h_max = height_ft * (1 + dynamic_rf)
+    h_min = height_ft * (1 - dynamic_rf) * dp_height_multiplier
+    h_max = height_ft * (1 + dynamic_rf) * dp_height_multiplier
 
     # Clean up for readability
     to_half = lambda x: round(x * 2) / 2
@@ -514,7 +523,7 @@ def process_data_wrapper(fetch_data_output: dict, config: dict):
     # Predict heights (ft)
     mop_heights = mop_swell_df.apply(
         lambda row: predict_bolinas_surf_height(
-            row["hs_swell"] * 3.28084, row["tp"], surf_cfg["nearshore"]
+            row["hs_swell"] * 3.28084, row["tp"], row["dp"], surf_cfg["nearshore"]
         ),
         axis=1,
     )

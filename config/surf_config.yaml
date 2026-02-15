@@ -62,6 +62,11 @@ surf_model:
     range_factor: 0.15        # ±15% spread for min/max surf range
     range_period_min: 12      # minimum period where range_factor starts increasing
     range_step: 0.01          # % by which range_factor spread increases per period second > range_period_min
+    # direction factors
+    dp_neutral: 215.0   # direction degrees neutral point
+    dp_slope: 0.04        # strong 
+    dp_max_boost: 2.00     # cap south boost at +55%
+    dp_min_factor: 0.80    # cap west penalty at -60%
 
 # === Tide scoring ===
   tide:

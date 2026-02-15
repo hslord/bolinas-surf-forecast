@@ -206,12 +206,14 @@ class TestSurfHeightSensitivity:
         cfg = _modify_config(
             _baseline_config, "surf_model.nearshore.range_factor", range_factor
         )
-        result = predict_bolinas_surf_height(4.0, 14.0, cfg["surf_model"]["nearshore"])
+        result = predict_bolinas_surf_height(
+            4.0, 14.0, 215.0, cfg["surf_model"]["nearshore"]
+        )
         spread = result["bolinas_surf_max_ft"] - result["bolinas_surf_min_ft"]
         assert spread >= 0
         if range_factor > 0.15:
             baseline = predict_bolinas_surf_height(
-                4.0, 14.0, _baseline_config["surf_model"]["nearshore"]
+                4.0, 14.0, 215.0, _baseline_config["surf_model"]["nearshore"]
             )
             baseline_spread = (
                 baseline["bolinas_surf_max_ft"] - baseline["bolinas_surf_min_ft"]

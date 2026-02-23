@@ -55,7 +55,7 @@ surf_model:
     south_swell: [150, 225]
     southwest_wrap: [225, 245]
     west_range: [245, 280]
-    nw_range: [280, 310]
+    nw_range: [280, 330]
     
   # === Nearshore shoaling and energy decay ===
   nearshore:

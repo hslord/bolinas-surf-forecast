@@ -83,10 +83,12 @@ class TestSwellScoreSensitivity:
             _baseline_config, "surf_model.spectral_scoring.w_tp", 0.70
         )
         cfg_tp = _modify_config(cfg_tp, "surf_model.spectral_scoring.w_hs", 0.10)
+        cfg_tp = _modify_config(cfg_tp, "surf_model.spectral_scoring.w_sp", 0.20)
         cfg_hs = _modify_config(
             _baseline_config, "surf_model.spectral_scoring.w_tp", 0.10
         )
         cfg_hs = _modify_config(cfg_hs, "surf_model.spectral_scoring.w_hs", 0.70)
+        cfg_hs = _modify_config(cfg_hs, "surf_model.spectral_scoring.w_sp", 0.20)
 
         scores_tp = compute_swell_score(_hindcast_swell, cfg_tp["surf_model"])
         scores_hs = compute_swell_score(_hindcast_swell, cfg_hs["surf_model"])

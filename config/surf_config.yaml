@@ -46,9 +46,9 @@ surf_model:
       spread_max_deg: 20.0   # Spread above this is considered disorganized/junk 
       
       # Weighting
-      w_hs: 0.30  # Height
-      w_tp: 0.50  # Period 
-      w_sp: 0.20  # Spread 
+      w_hs: 0.40  # Height
+      w_tp: 0.45  # Period 
+      w_sp: 0.15  # Spread 
 
   # ---- UI Labels (Used for display only) ----
   ui_ranges:
@@ -64,9 +64,9 @@ surf_model:
     range_step: 0.01          # % by which range_factor spread increases per period second > range_period_min
     # direction factors
     dp_neutral: 215.0   # direction degrees neutral point
-    dp_slope: 0.04        # strong 
-    dp_max_boost: 2.00     # cap south boost at +55%
-    dp_min_factor: 0.80    # cap west penalty at -60%
+    dp_slope: 0.01        # strength of direction factor
+    dp_max_boost: 1.5     # cap south boost
+    dp_min_factor: 0.80    # cap N/W penalty 
 
 # === Tide scoring ===
   tide:

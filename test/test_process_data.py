@@ -93,14 +93,16 @@ def _spectral_config():
     return {
         "spectral_scoring": {
             "hs_min_m": 0.3,
-            "hs_full_credit_m": 1.5,
+            "hs_center_m": 1.0,
+            "hs_steepness": 6,
             "tp_min_s": 10.0,
-            "tp_full_credit_s": 16.0,
+            "tp_center_s": 13.0,
+            "tp_steepness": 0.8,
             "spread_min_deg": 5.0,
             "spread_max_deg": 20.0,
             "w_hs": 0.40,
-            "w_tp": 0.40,
-            "w_sp": 0.20,
+            "w_tp": 0.45,
+            "w_sp": 0.15,
         }
     }
 

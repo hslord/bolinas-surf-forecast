@@ -33,15 +33,17 @@ data_sources:
 surf_model:
 
   spectral_scoring:
-      # Height Scoring (Hs)
-      hs_min_m: 0.3          # Waves smaller than this (in meters) get 0 score
-      hs_full_credit_m: 1.5  # Waves this size or larger get 1.0 score
+      # Height Scoring (Hs) — sigmoid curve
+      hs_min_m: 0.3          # Waves smaller than this (in meters) get 0 score (hard cutoff)
+      hs_center_m: 1.0       # Inflection point of sigmoid (score = 0.5 here)
+      hs_steepness: 6        # Sharpness of transition; higher = more cliff-like
+
+      # Period Scoring (Tp) — sigmoid curve
+      tp_min_s: 10.0         # Periods below this get 0 score (hard cutoff)
+      tp_center_s: 13.0      # Inflection point of sigmoid (score = 0.5 here)
+      tp_steepness: 0.8      # Sharpness of transition; lower = gentler slope
       
-      # Period Scoring (Tp)
-      tp_min_s: 10.0         # Periods below this get 0 score
-      tp_full_credit_s: 16.0 # Periods this long or longer get 1.0 score
-      
-      # Directional Spread Scoring
+      # Directional Spread Scoring - linear
       spread_min_deg: 5.0    # "Ideal" narrow spread (lower = cleaner)
       spread_max_deg: 20.0   # Spread above this is considered disorganized/junk 
       
@@ -59,8 +61,8 @@ surf_model:
     
   # === Nearshore shoaling and energy decay ===
   nearshore:
-    range_factor: 0.15        # ±15% spread for min/max surf range
-    range_period_min: 12      # minimum period where range_factor starts increasing
+    range_factor: 0.10        # ±15% spread for min/max surf range
+    range_period_min: 16      # minimum period where range_factor starts increasing
     range_step: 0.01          # % by which range_factor spread increases per period second > range_period_min
     # direction factors
     dp_neutral: 215.0   # direction degrees neutral point

@@ -188,14 +188,16 @@ def compute_swell_score(ds_swell, surf_model):
             f"Spectral scoring weights must sum to 1.0, got {weight_sum:.3f}"
         )
 
-    # sqrt curve: ramp up
-    hs_range = spectral_cfg["hs_full_credit_m"] - spectral_cfg["hs_min_m"]
-    hs_score = np.sqrt(np.clip((hs_swell - spectral_cfg["hs_min_m"]) / hs_range, 0, 1))
+    # sigmoid curve: slow ramp, fast transition near center, plateau at top
+    hs_below_min = hs_swell < spectral_cfg["hs_min_m"]
+    hs_score = 1 / (1 + np.exp(-spectral_cfg["hs_steepness"] * (hs_swell - spectral_cfg["hs_center_m"])))
+    hs_score = hs_score.where(~hs_below_min, 0.0)
 
     # Peak period
     tp = 1.0 / freq_peak
-    tp_range = spectral_cfg["tp_full_credit_s"] - spectral_cfg["tp_min_s"]
-    tp_score = np.sqrt(np.clip((tp - spectral_cfg["tp_min_s"]) / tp_range, 0, 1))
+    tp_below_min = tp < spectral_cfg["tp_min_s"]
+    tp_score = 1 / (1 + np.exp(-spectral_cfg["tp_steepness"] * (tp - spectral_cfg["tp_center_s"])))
+    tp_score = tp_score.where(~tp_below_min, 0.0)
 
     # Spread at peak frequency
     spread_range = spectral_cfg["spread_max_deg"] - spectral_cfg["spread_min_deg"]

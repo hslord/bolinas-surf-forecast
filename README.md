@@ -22,8 +22,8 @@ MOP station **MA147** sits at **15-meter water depth** near the Patch - meaning 
 ### Pipeline Steps
 
 1. **Fetch** CDIP MOP spectral forecasts for MA147 (nearshore) and WW3 partitioned swell data (offshore context) via OPeNDAP.
-2. **Score** swell quality (1-10) from the MOP spectrum - evaluating significant height (Hs), peak period (Tp), and directional spread at the swell frequency band.
-3. **Predict** surfable wave-height range (ft) from MOP Hs with period-adjusted variability.
+2. **Partition** the MA147 spectrum into a dominant and (if present) secondary swell, then **score** quality (1-10) from the dominant partition's significant height (Hs), peak period (Tp), and directional spread.
+3. **Predict** surfable wave-height range (ft) by applying a direction-based multiplier to each partition's own height, then combining dominant and secondary before applying period-adjusted variability.
 4. **Classify** winds as offshore / cross-shore / onshore relative to Bolinas' coastline orientation and apply parameterized wind and tide penalties.
 5. **Rank** WW3 offshore partitions by wave power to provide dominant/secondary swell context for the dashboard.
 6. **Combine** swell, wind, and tide scores into a final Surf Score (1-10) for each hourly forecast window.
@@ -33,6 +33,7 @@ MOP station **MA147** sits at **15-meter water depth** near the Patch - meaning 
 
 ## Features
 - **CDIP MOP Nearshore Model:** Wave heights derived from Scripps' spectral refraction model at 15m depth. Supports ECMWF and NCEP forcing.
+- **Multi-Swell Partitioning:** Detects distinct dominant/secondary swells directly from the MA147 spectrum via frequency-domain peak detection, so a groundswell and a windswell arriving together are scored and combined independently rather than blended into one average.
 - **Spectral Swell Scoring:** Quality score from energy density, peak period, and directional spread - prioritizes clean, long-period groundswells over disorganized short-period sea.
 - **Tide Integration:** NOAA CO-OPS predictions scored with a Gaussian curve around an optimal tide height.
 - **Wind Alignment:** Classified relative to Bolinas' coastal orientation (165 SSE) to identify true offshore flow.
@@ -84,7 +85,7 @@ make ui
 Unit tests and config sensitivity tests live in `test/` and cover data fetching, processing logic, scoring functions, UI helpers, and config parameter behaviors.
 
 ```bash
-make test          # all 56 tests (~3s)
+make test          # all 72 tests (~5s)
 make coverage      # tests with line-by-line coverage report
 ```
 
@@ -96,7 +97,7 @@ Config sensitivity tests (`test/test_config_sensitivity.py`) load real MA147 hin
 
 The `simulations/config_tuning.ipynb` notebook provides an interactive environment for experimenting with config parameter values against real hindcast data.
 
-It loads the MA147 hindcast, auto-selects representative days spanning a range of conditions (biggest/smallest swell, longest/shortest period, cleanest/messiest spread, plus median days), and produces side-by-side comparison tables showing baseline vs experiment scores. Separate sections cover swell scoring, wind penalties, tide penalties, and combined effects.
+It loads the MA147 hindcast, auto-selects representative days spanning a range of conditions (biggest/smallest swell, longest/shortest period, cleanest/messiest spread, plus median days), and produces side-by-side comparison tables showing baseline vs experiment scores. Separate sections cover swell scoring, wind penalties, tide penalties, and combined effects. A dedicated section runs a joint 2D sweep of the partitioning parameters (`min_peak_prominence` x `min_peak_distance_hz`) against the full hindcast, showing how detected secondary-swell prevalence and average swell score shift across the grid.
 
 ---
 
@@ -152,6 +153,7 @@ bolinas-surf-forecast/
 
 All tunable parameters live in `config/surf_config.yaml`:
 
+- **Partitioning** - peak-detection thresholds (prominence, minimum frequency separation) that control when a second energy peak in the MA147 spectrum counts as a distinct secondary swell
 - **Spectral scoring weights** - height, period, and spread contributions to the swell quality score
 - **Nearshore range** - variability factor for translating MOP Hs to a surfable wave-height range
 - **Wind scoring** - offshore/onshore angle cutoffs, gust weighting, penalty curve

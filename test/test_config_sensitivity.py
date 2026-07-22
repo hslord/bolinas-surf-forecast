@@ -209,15 +209,86 @@ class TestSurfHeightSensitivity:
             _baseline_config, "surf_model.nearshore.range_factor", range_factor
         )
         result = predict_bolinas_surf_height(
-            4.0, 14.0, 215.0, cfg["surf_model"]["nearshore"]
+            4.0, 14.0, 215.0, np.nan, np.nan, np.nan, cfg["surf_model"]["nearshore"]
         )
         spread = result["bolinas_surf_max_ft"] - result["bolinas_surf_min_ft"]
         assert spread >= 0
         if range_factor > 0.15:
             baseline = predict_bolinas_surf_height(
-                4.0, 14.0, 215.0, _baseline_config["surf_model"]["nearshore"]
+                4.0,
+                14.0,
+                215.0,
+                np.nan,
+                np.nan,
+                np.nan,
+                _baseline_config["surf_model"]["nearshore"],
             )
             baseline_spread = (
                 baseline["bolinas_surf_max_ft"] - baseline["bolinas_surf_min_ft"]
             )
             assert spread >= baseline_spread
+
+
+# -- Partitioning config sensitivity ----------------------------------------
+
+
+class TestPartitioningSensitivity:
+    """
+    Uses the real MA147 hindcast (which contains genuine multi-swell periods)
+    to confirm that the partitioning knobs move detected-secondary-swell
+    prevalence in the expected direction: stricter thresholds should detect
+    fewer (or equal) secondary partitions, never more.
+    """
+
+    def test_higher_peak_prominence_detects_fewer_or_equal_secondaries(
+        self, _hindcast_swell, _baseline_config
+    ):
+        lenient = _modify_config(
+            _baseline_config, "surf_model.partitioning.min_peak_prominence", 0.05
+        )
+        strict = _modify_config(
+            _baseline_config, "surf_model.partitioning.min_peak_prominence", 0.6
+        )
+        lenient_scores = compute_swell_score(_hindcast_swell, lenient["surf_model"])
+        strict_scores = compute_swell_score(_hindcast_swell, strict["surf_model"])
+
+        lenient_secondary_count = lenient_scores["hs_secondary"].notna().sum()
+        strict_secondary_count = strict_scores["hs_secondary"].notna().sum()
+
+        assert strict_secondary_count <= lenient_secondary_count
+
+    def test_higher_peak_distance_detects_fewer_or_equal_secondaries(
+        self, _hindcast_swell, _baseline_config
+    ):
+        lenient = _modify_config(
+            _baseline_config, "surf_model.partitioning.min_peak_distance_hz", 0.005
+        )
+        strict = _modify_config(
+            _baseline_config, "surf_model.partitioning.min_peak_distance_hz", 0.04
+        )
+        lenient_scores = compute_swell_score(_hindcast_swell, lenient["surf_model"])
+        strict_scores = compute_swell_score(_hindcast_swell, strict["surf_model"])
+
+        lenient_secondary_count = lenient_scores["hs_secondary"].notna().sum()
+        strict_secondary_count = strict_scores["hs_secondary"].notna().sum()
+
+        assert strict_secondary_count <= lenient_secondary_count
+
+    def test_dominant_partition_stable_across_prominence_changes(
+        self, _hindcast_swell, _baseline_config
+    ):
+        """The dominant partition (highest wave power) shouldn't disappear
+        just because the prominence threshold changed -- only whether a
+        *secondary* is also detected should be sensitive to it."""
+        lenient = _modify_config(
+            _baseline_config, "surf_model.partitioning.min_peak_prominence", 0.05
+        )
+        strict = _modify_config(
+            _baseline_config, "surf_model.partitioning.min_peak_prominence", 0.6
+        )
+        lenient_scores = compute_swell_score(_hindcast_swell, lenient["surf_model"])
+        strict_scores = compute_swell_score(_hindcast_swell, strict["surf_model"])
+
+        # Every timestep should still have a valid (non-NaN) dominant swell
+        assert strict_scores["tp"].notna().all()
+        assert lenient_scores["tp"].notna().all()

@@ -121,20 +121,36 @@ forecast_df["Surf (ft)"] = (
     + forecast_df["Surf Height Max (ft)"].round(1).astype(str)
 )
 
-forecast_df["Dominant"] = (
-    forecast_df["Dominant Swell Size (ft)"].fillna(0).round(1).astype(str)
+# Dominant/Secondary Swell is WW3 (offshore) data -- by the time a swell
+# reaches MA147 it's refracted too far to describe in these terms, so the
+# UI shows what's actually out there rather than the nearshore-transformed
+# version. The underlying Surf Score / Surf Height still use MOP.
+forecast_df["Offshore Dominant"] = (
+    forecast_df["Offshore Dominant Swell Size (ft)"].fillna(0).round(1).astype(str)
     + "ft @ "
-    + forecast_df["Dominant Swell Period"].fillna(0).round(0).astype(int).astype(str)
+    + forecast_df["Offshore Dominant Swell Period"]
+    .fillna(0)
+    .round(0)
+    .astype(int)
+    .astype(str)
     + "s "
-    + forecast_df["Dominant Swell Direction"].fillna(0).apply(categorize_bolinas_swell)
+    + forecast_df["Offshore Dominant Swell Direction"]
+    .fillna(0)
+    .apply(categorize_bolinas_swell)
 )
 
-forecast_df["Secondary"] = (
-    forecast_df["Secondary Swell Size (ft)"].fillna(0).round(1).astype(str)
+forecast_df["Offshore Secondary"] = (
+    forecast_df["Offshore Secondary Swell Size (ft)"].fillna(0).round(1).astype(str)
     + "ft @ "
-    + forecast_df["Secondary Swell Period"].fillna(0).round(0).astype(int).astype(str)
+    + forecast_df["Offshore Secondary Swell Period"]
+    .fillna(0)
+    .round(0)
+    .astype(int)
+    .astype(str)
     + "s "
-    + forecast_df["Secondary Swell Direction"].fillna(0).apply(categorize_bolinas_swell)
+    + forecast_df["Offshore Secondary Swell Direction"]
+    .fillna(0)
+    .apply(categorize_bolinas_swell)
 )
 
 forecast_df["Wind"] = (
@@ -246,8 +262,8 @@ if not good_windows.empty:
             "Surf Height Max (ft)": lambda x: round(x.mean() * 2) / 2,
             "Wind Speed (MPH)": ["min", "max"],
             "Wind Direction": "first",
-            "Dominant": "first",
-            "Secondary": "first",
+            "Offshore Dominant": "first",
+            "Offshore Secondary": "first",
             "Tide (ft)": "first",
         }
     )
@@ -324,8 +340,8 @@ if not good_windows.empty:
             "max_score": "Peak Score",
             "Surf (ft)": "Avg Size (ft)",
             "wind_range": "Wind Range (MPH)",
-            "dom_swell": "Dominant Swell",
-            "sec_swell": "Secondary Swell",
+            "dom_swell": "Offshore Dominant Swell",
+            "sec_swell": "Offshore Secondary Swell",
             "tide": "Start Tide",
         },
         use_container_width=True,
@@ -349,12 +365,12 @@ daily_summary = daylight_df.groupby("Date").agg(
         "Surf Score (1-10)": "max",
         "Surf Height Min (ft)": "min",
         "Surf Height Max (ft)": "max",
-        "Dominant Swell Period": "mean",
-        "Dominant Swell Size (ft)": "mean",
-        "Dominant Swell Direction": circular_mean_deg,
-        "Secondary Swell Period": "mean",
-        "Secondary Swell Size (ft)": "mean",
-        "Secondary Swell Direction": circular_mean_deg,
+        "Offshore Dominant Swell Period": "mean",
+        "Offshore Dominant Swell Size (ft)": "mean",
+        "Offshore Dominant Swell Direction": circular_mean_deg,
+        "Offshore Secondary Swell Period": "mean",
+        "Offshore Secondary Swell Size (ft)": "mean",
+        "Offshore Secondary Swell Direction": circular_mean_deg,
         "Wind Speed (MPH)": ["min", "max"],
     }
 )
@@ -372,38 +388,38 @@ daily_summary["Surf Range"] = (
     + " ft"
 )
 
-daily_summary["Avg Dominant Swell"] = (
-    daily_summary["Dominant Swell Size (ft)_mean"]
+daily_summary["Avg Offshore Dominant Swell"] = (
+    daily_summary["Offshore Dominant Swell Size (ft)_mean"]
     .fillna(0)
     .round(0)
     .astype(int)
     .astype(str)
     + "ft @ "
-    + daily_summary["Dominant Swell Period_mean"]
+    + daily_summary["Offshore Dominant Swell Period_mean"]
     .fillna(0)
     .round(0)
     .astype(int)
     .astype(str)
     + "s "
-    + daily_summary["Dominant Swell Direction_mean"]
+    + daily_summary["Offshore Dominant Swell Direction_mean"]
     .fillna(0)
     .apply(categorize_bolinas_swell)
 )
 
-daily_summary["Avg Secondary Swell"] = (
-    daily_summary["Secondary Swell Size (ft)_mean"]
+daily_summary["Avg Offshore Secondary Swell"] = (
+    daily_summary["Offshore Secondary Swell Size (ft)_mean"]
     .fillna(0)
     .round(0)
     .astype(int)
     .astype(str)
     + "ft @ "
-    + daily_summary["Secondary Swell Period_mean"]
+    + daily_summary["Offshore Secondary Swell Period_mean"]
     .fillna(0)
     .round(0)
     .astype(int)
     .astype(str)
     + "s "
-    + daily_summary["Secondary Swell Direction_mean"]
+    + daily_summary["Offshore Secondary Swell Direction_mean"]
     .fillna(0)
     .apply(categorize_bolinas_swell)
 )
@@ -420,16 +436,16 @@ display_df = daily_summary[
     [
         "Surf Score (1-10)_max",
         "Surf Range",
-        "Avg Dominant Swell",
-        "Avg Secondary Swell",
+        "Avg Offshore Dominant Swell",
+        "Avg Offshore Secondary Swell",
         "Wind Range",
     ]
 ].copy()
 display_df.columns = [
     "Max Surf Score",
     "Surf Range",
-    "Avg Dominant Swell",
-    "Avg Secondary Swell",
+    "Avg Offshore Dominant Swell",
+    "Avg Offshore Secondary Swell",
     "Wind Range",
 ]
 
@@ -491,7 +507,7 @@ with st.container(border=True):
     )
 
     # Column 2: Swell (using is_multi for the secondary swell styling)
-    swell_html = f"**Dom:** {time_row['Dominant']}<br><span style='font-size:0.8rem; color:grey;'>**Sec:** {time_row['Secondary']}</span>"
+    swell_html = f"**Dom:** {time_row['Offshore Dominant']}<br><span style='font-size:0.8rem; color:grey;'>**Sec:** {time_row['Offshore Secondary']}</span>"
     breakdown_item(
         col2,
         time_row["Dominant Swell Score (1-10)"],
@@ -526,7 +542,7 @@ with st.expander("How are these scores calculated?"):
     # Render the Markdown
     st.write(
         f"""
-    - **Swell:** Optimized for propagation from:  
+    - **Swell:** Optimized for propagation from:
       {swell_help}
     - **Wind:** Optimized for offshore flow relative to the coast orientation of **{config["data_sources"]["coast_orientation"]}°**.
     - **Tide:** The "Tide Score" is highest at **1 ft**.

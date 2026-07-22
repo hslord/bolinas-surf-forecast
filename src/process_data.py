@@ -1,6 +1,7 @@
 # IMPORTS
 import pandas as pd
 import numpy as np
+from scipy.signal import find_peaks
 from reference_functions import status
 from zoneinfo import ZoneInfo
 
@@ -129,15 +130,147 @@ def expand_timeseries_data(df: pd.DataFrame, freq="h", limit=6):
     return expanded
 
 
+def detect_swell_partitions(
+    freq,
+    energy,
+    a1,
+    b1,
+    bandwidth,
+    min_peak_prominence,
+    min_peak_distance_hz,
+    max_partitions=2,
+):
+    """
+    Partition a single-timestep 1D swell spectrum into distinct energy peaks.
+
+    Full 2D partitioning (CDIP's MEM method) isn't available at MOP nodes, so
+    this detects peaks directly in the 1D frequency spectrum via
+    scipy.signal.find_peaks and treats each as an independent swell.
+
+    Parameters
+    ----------
+    freq : array-like
+        Frequency bins (Hz), ascending.
+    energy : array-like
+        waveEnergyDensity at each frequency bin, for one timestep.
+    a1, b1 : array-like
+        First directional Fourier coefficients at each frequency bin.
+    bandwidth : array-like
+        waveBandwidth at each frequency bin.
+    min_peak_prominence : float
+        Minimum peak prominence, expressed as a fraction of the spectrum's
+        max energy density (not an absolute unit), so the threshold stays
+        meaningful across both small and large sea states.
+    min_peak_distance_hz : float
+        Minimum frequency separation (Hz) between distinct peaks.
+    max_partitions : int
+        Maximum number of partitions to return (top-N by wave power).
+
+    Returns
+    -------
+    list of dict
+        Each dict has keys 'hs' (m), 'tp' (s), 'dp' (deg), 'spread' (deg),
+        'r1' (unitless), 'power'. Sorted by descending power. A flat or
+        near-zero-energy spectrum (no detectable peak) returns a single
+        degenerate partition: hs=0.0, tp/dp/spread/r1=NaN -- this keeps
+        downstream code (which expects at least one partition) from breaking
+        on quiet days, without fabricating a fake period or direction for
+        energy that isn't really there.
+    """
+    freq = np.asarray(freq)
+    energy = np.asarray(energy)
+    a1 = np.asarray(a1)
+    b1 = np.asarray(b1)
+    bandwidth = np.asarray(bandwidth)
+    n = len(freq)
+
+    no_swell = [
+        {
+            "hs": 0.0,
+            "tp": np.nan,
+            "dp": np.nan,
+            "spread": np.nan,
+            "r1": np.nan,
+            "power": 0.0,
+        }
+    ]
+
+    energy_max = np.nanmax(energy) if n > 0 else 0.0
+    if n == 0 or not np.isfinite(energy_max) or energy_max <= 0:
+        return no_swell
+
+    # scipy.signal.find_peaks never returns index 0 or -1 of the array it's
+    # given (a peak needs neighbors on both sides). Pad both ends with a
+    # sentinel value guaranteed lower than any real sample so a genuine peak
+    # sitting at the very first/last bin of the band can still register.
+    pad_value = np.min(energy) - 1e-9
+    padded = np.concatenate(([pad_value], energy, [pad_value]))
+
+    freq_step = np.mean(np.diff(freq)) if n > 1 else 1.0
+    distance_bins = (
+        max(1, round(min_peak_distance_hz / freq_step)) if freq_step > 0 else 1
+    )
+
+    peak_idx_padded, _ = find_peaks(
+        padded,
+        prominence=min_peak_prominence * energy_max,
+        distance=distance_bins,
+    )
+    peak_idx = np.sort(peak_idx_padded - 1)
+    peak_idx = peak_idx[(peak_idx >= 0) & (peak_idx < n)]
+
+    if len(peak_idx) == 0:
+        return no_swell
+
+    # Partition boundaries: the midpoint (bin index) between adjacent peaks,
+    # with the band edges bounding the first/last partition. This tiles the
+    # whole spectrum with no gaps or overlaps ("nearest peak" assignment).
+    boundaries = [0]
+    for left_peak, right_peak in zip(peak_idx[:-1], peak_idx[1:]):
+        boundaries.append((left_peak + right_peak) // 2 + 1)
+    boundaries.append(n)
+
+    partitions = []
+    for i, p_idx in enumerate(peak_idx):
+        window = slice(boundaries[i], boundaries[i + 1])
+
+        m0 = np.sum(energy[window] * bandwidth[window])
+        hs = 4 * np.sqrt(m0)
+        tp = 1.0 / freq[p_idx]
+
+        a1_p, b1_p = a1[p_idx], b1[p_idx]
+        r1 = np.sqrt(a1_p**2 + b1_p**2)
+        spread = np.degrees(np.sqrt(2 * (1 - r1)))
+        dp = np.degrees(np.arctan2(b1_p, a1_p)) % 360
+
+        partitions.append(
+            {
+                "hs": hs,
+                "tp": tp,
+                "dp": dp,
+                "spread": spread,
+                "r1": r1,
+                "power": (hs**2) * tp,
+            }
+        )
+
+    partitions.sort(key=lambda p: p["power"], reverse=True)
+    return partitions[:max_partitions]
+
+
 def compute_swell_score(ds_swell, surf_model):
     """
     Compute a 1-10 swell quality score for each timestep in a swell-filtered
     MOP dataset based on wave energy density and spectral parameters.
 
-    The score evaluates how clean and powerful the swell will by combining
-    significant wave height (Hs), peak period (Tp), and directional spread.
-    It applies non-linear square-root ramps to prioritize long-period
-    groundswells and penalize disorganized spectral spread.
+    Within the swell band, each timestep's 1D frequency spectrum is
+    partitioned into distinct energy peaks via detect_swell_partitions() --
+    since MOP is a linear model applied per frequency/direction bin, MA147's
+    spectrum already is the nearshore-transformed superposition of every
+    offshore swell, so partitioning happens directly on it rather than by
+    re-deriving swells from raw WW3 partitions. The dominant partition (by
+    wave power) drives the quality score; both dominant and secondary are
+    returned for downstream surf-height prediction.
 
     Parameters
     ----------
@@ -147,36 +280,74 @@ def compute_swell_score(ds_swell, surf_model):
         - waveEnergyDensity
         - waveA1Value / waveB1Value (for directional spread)
         - waveBandwidth
-        - waveDp
         - waveTime
-    surf_model: config with spectral parameters
+    surf_model: config with 'spectral_scoring' and 'partitioning' blocks
 
     Returns
     -------
     pandas.DataFrame
         Time-indexed DataFrame containing:
-        - hs_swell : Significant swell height (meters)
-        - tp : Peak wave period (seconds)
-        - dp : Peak wave direction (degrees)
-        - spread : Directional spread (degrees)
-        - r1 : First directional moment (unitless)
+        - hs_swell : Dominant partition's significant height (meters)
+        - tp : Dominant partition's peak period (seconds)
+        - dp : Dominant partition's peak direction (degrees)
+        - spread : Dominant partition's directional spread (degrees)
+        - r1 : Dominant partition's first directional moment (unitless)
+        - hs_secondary, tp_secondary, dp_secondary, spread_secondary :
+          Secondary partition's equivalents (NaN if only one partition
+          was detected)
         - hs_score : Normalized height component [0, 1]
         - tp_score : Normalized period component [0, 1]
         - spread_score : Normalized spread component [0, 1]
         - swell_score : Final composite score [1, 10]
     """
-    # Spectral peak info per timestep
-    peak_idx = ds_swell.waveEnergyDensity.argmax(dim="waveFrequency")
-    a1_peak = ds_swell.waveA1Value.isel(waveFrequency=peak_idx)
-    b1_peak = ds_swell.waveB1Value.isel(waveFrequency=peak_idx)
-    freq_peak = ds_swell.waveFrequency.isel(waveFrequency=peak_idx)
-    r1 = np.sqrt(a1_peak**2 + b1_peak**2)
-    spread_deg = np.degrees(np.sqrt(2 * (1 - r1)))
+    part_cfg = surf_model["partitioning"]
+    freq = ds_swell.waveFrequency.values
+    # waveBandwidth is nominally frequency-only, but e.g. xr.concat'ing a
+    # hindcast and a nowcast dataset together can broadcast it to also carry
+    # a waveTime dimension (if the two source files' bandwidths don't match
+    # byte-for-byte) -- handle both shapes rather than assume one.
+    bandwidth_has_time = "waveTime" in ds_swell.waveBandwidth.dims
+    bandwidth_flat = None if bandwidth_has_time else ds_swell.waveBandwidth.values
 
-    # Swell Hs
-    bw = ds_swell.waveBandwidth
-    m0 = (ds_swell.waveEnergyDensity * bw).sum(dim="waveFrequency")
-    hs_swell = 4 * np.sqrt(m0)
+    dominant_rows = []
+    secondary_rows = []
+    for t in range(ds_swell.sizes["waveTime"]):
+        bandwidth = (
+            ds_swell.waveBandwidth.isel(waveTime=t).values
+            if bandwidth_has_time
+            else bandwidth_flat
+        )
+        partitions = detect_swell_partitions(
+            freq=freq,
+            energy=ds_swell.waveEnergyDensity.isel(waveTime=t).values,
+            a1=ds_swell.waveA1Value.isel(waveTime=t).values,
+            b1=ds_swell.waveB1Value.isel(waveTime=t).values,
+            bandwidth=bandwidth,
+            min_peak_prominence=part_cfg["min_peak_prominence"],
+            min_peak_distance_hz=part_cfg["min_peak_distance_hz"],
+            max_partitions=part_cfg["max_partitions_mop"],
+        )
+        dominant_rows.append(partitions[0])
+        secondary_rows.append(
+            partitions[1]
+            if len(partitions) > 1
+            else {
+                "hs": np.nan,
+                "tp": np.nan,
+                "dp": np.nan,
+                "spread": np.nan,
+                "r1": np.nan,
+            }
+        )
+
+    dominant = pd.DataFrame(dominant_rows)
+    secondary = pd.DataFrame(secondary_rows)
+
+    hs_swell = dominant["hs"]
+    tp = dominant["tp"]
+    dp = dominant["dp"]
+    spread_deg = dominant["spread"]
+    r1 = dominant["r1"]
 
     # config
     spectral_cfg = surf_model["spectral_scoring"]
@@ -190,20 +361,26 @@ def compute_swell_score(ds_swell, surf_model):
 
     # sigmoid curve: slow ramp, fast transition near center, plateau at top
     hs_below_min = hs_swell < spectral_cfg["hs_min_m"]
-    hs_score = 1 / (1 + np.exp(-spectral_cfg["hs_steepness"] * (hs_swell - spectral_cfg["hs_center_m"])))
+    hs_score = 1 / (
+        1
+        + np.exp(
+            -spectral_cfg["hs_steepness"] * (hs_swell - spectral_cfg["hs_center_m"])
+        )
+    )
     hs_score = hs_score.where(~hs_below_min, 0.0)
 
-    # Peak period
-    tp = 1.0 / freq_peak
-    tp_below_min = tp < spectral_cfg["tp_min_s"]
-    tp_score = 1 / (1 + np.exp(-spectral_cfg["tp_steepness"] * (tp - spectral_cfg["tp_center_s"])))
+    # Peak period (NaN on a no-swell timestep propagates to a 0 tp_score below)
+    tp_below_min = (tp < spectral_cfg["tp_min_s"]) | tp.isna()
+    tp_score = 1 / (
+        1 + np.exp(-spectral_cfg["tp_steepness"] * (tp - spectral_cfg["tp_center_s"]))
+    )
     tp_score = tp_score.where(~tp_below_min, 0.0)
 
     # Spread at peak frequency
     spread_range = spectral_cfg["spread_max_deg"] - spectral_cfg["spread_min_deg"]
     spread_score = np.clip(
         1 - (spread_deg - spectral_cfg["spread_min_deg"]) / spread_range, 0, 1
-    )
+    ).fillna(0.0)
 
     # Composite: scale 0-1 to 1-10
     raw = (
@@ -217,9 +394,13 @@ def compute_swell_score(ds_swell, surf_model):
         {
             "hs_swell": hs_swell.values,
             "tp": tp.values,
-            "dp": ds_swell.waveDp.values,
+            "dp": dp.values,
             "spread": spread_deg.values,
             "r1": r1.values,
+            "hs_secondary": secondary["hs"].values,
+            "tp_secondary": secondary["tp"].values,
+            "dp_secondary": secondary["dp"].values,
+            "spread_secondary": secondary["spread"].values,
             "hs_score": hs_score.values,
             "tp_score": tp_score.values,
             "spread_score": spread_score.values,
@@ -229,25 +410,53 @@ def compute_swell_score(ds_swell, surf_model):
     )
 
 
+def _dp_height_multiplier(dp_deg: float, nearshore_cfg: dict) -> float:
+    """
+    Direction-based height multiplier for a single swell: more southerly dp
+    (below dp_neutral) boosts height (wraps more cleanly around Duxbury
+    Reef); more northerly/westerly dp reduces it (more shadowed).
+    """
+    dp_factor = 1.0 + nearshore_cfg["dp_slope"] * (nearshore_cfg["dp_neutral"] - dp_deg)
+    return np.clip(
+        dp_factor, nearshore_cfg["dp_min_factor"], nearshore_cfg["dp_max_boost"]
+    )
+
+
 def predict_bolinas_surf_height(
-    height_ft: float,
-    period_s: float,
-    dp_deg: float,
+    height_dom_ft: float,
+    period_dom_s: float,
+    dp_dom_deg: float,
+    height_sec_ft: float,
+    period_sec_s: float,
+    dp_sec_deg: float,
     nearshore_cfg: dict,
 ):
     """
     Estimate the nearshore surf height range at Bolinas using MOP-derived
-    nearshore swell height. Applies a dynamic variability range based
-    on wave period to account for set consistency and shoaling.
+    nearshore swell heights. Each detected partition (dominant and, if
+    present, secondary) wraps/shadows around Duxbury Reef according to its
+    own angle, so the direction-based height multiplier is applied per
+    partition, to its own height, before the two are combined -- a poorly
+    angled secondary swell should not inherit the dominant swell's (possibly
+    better) multiplier, or vice versa. A dynamic variability range (based on
+    wave period, to account for set consistency and shoaling) is then applied
+    to the combined height.
 
     Parameters
     ----------
-    height_ft : float
-        Nearshore significant wave height (ft) from CDIP MOP.
-    period_s : float
-        Peak swell period (s).
-    dp_deg : float
-        Peak direction of swell (degrees)
+    height_dom_ft : float
+        Dominant partition's nearshore significant wave height (ft).
+    period_dom_s : float
+        Dominant partition's peak period (s).
+    dp_dom_deg : float
+        Dominant partition's peak direction (degrees).
+    height_sec_ft : float
+        Secondary partition's nearshore significant wave height (ft).
+        NaN when only one partition was detected.
+    period_sec_s : float
+        Secondary partition's peak period (s). NaN when absent.
+    dp_sec_deg : float
+        Secondary partition's peak direction (degrees). NaN when absent.
     nearshore_cfg : dict
         Configuration block: surf_model.nearshore
         Keys:
@@ -263,28 +472,52 @@ def predict_bolinas_surf_height(
             "bolinas_surf_max_ft": float
         }
     """
-    # Missing inputs or flat ocean → zero
-    if pd.isna(height_ft) or pd.isna(period_s) or pd.isna(dp_deg) or height_ft <= 0:
+    # Missing dominant inputs or flat ocean → zero (no swell present at all)
+    if (
+        pd.isna(height_dom_ft)
+        or pd.isna(period_dom_s)
+        or pd.isna(dp_dom_deg)
+        or height_dom_ft <= 0
+    ):
         return {
             "bolinas_surf_min_ft": 0.0,
             "bolinas_surf_max_ft": 0.0,
         }
 
-    # Increase the range by X% for every second of period over Ys (e.g., 12s)
+    # Apply each partition's own direction multiplier to its own height
+    # before combining -- not once to a pre-combined total using only the
+    # dominant direction.
+    transformed_hs_dom = height_dom_ft * _dp_height_multiplier(
+        dp_dom_deg, nearshore_cfg
+    )
+
+    has_secondary = not (
+        pd.isna(height_sec_ft)
+        or pd.isna(period_sec_s)
+        or pd.isna(dp_sec_deg)
+        or height_sec_ft <= 0
+    )
+    transformed_hs_sec = (
+        height_sec_ft * _dp_height_multiplier(dp_sec_deg, nearshore_cfg)
+        if has_secondary
+        else 0.0
+    )
+
+    combined_hs = np.sqrt(transformed_hs_dom**2 + transformed_hs_sec**2)
+
+    # Increase the range by X% for every second of period over Ys (e.g., 12s).
+    # Deliberately keyed to the dominant partition's period only (not a blend
+    # of both), since it primarily governs set consistency/character -- a
+    # simplification worth revisiting if testing shows a strong secondary
+    # swell should also affect variability.
     dynamic_rf = nearshore_cfg["range_factor"] + (
-        max(0, period_s - nearshore_cfg["range_period_min"])
+        max(0, period_dom_s - nearshore_cfg["range_period_min"])
         * nearshore_cfg["range_step"]
     )
 
-    # Adjust the hight multiplier by degrees - more southerly higher multiplier, northerly lower
-    dp_factor = 1.0 + nearshore_cfg["dp_slope"] * (nearshore_cfg["dp_neutral"] - dp_deg)
-    dp_height_multiplier = np.clip(
-        dp_factor, nearshore_cfg["dp_min_factor"], nearshore_cfg["dp_max_boost"]
-    )
-
-    # Apply to height-MOP height as the median expectation
-    h_min = height_ft * (1 - dynamic_rf) * dp_height_multiplier
-    h_max = height_ft * (1 + dynamic_rf) * dp_height_multiplier
+    # Apply to the combined, direction-adjusted height as the median expectation
+    h_min = combined_hs * (1 - dynamic_rf)
+    h_max = combined_hs * (1 + dynamic_rf)
 
     # Clean up for readability
     to_half = lambda x: round(x * 2) / 2
@@ -522,10 +755,18 @@ def process_data_wrapper(fetch_data_output: dict, config: dict):
     mop_swell_score = compute_swell_score(fetch_data_output["cdip_mop"], surf_cfg)
     mop_swell_df = expand_timeseries_data(mop_swell_score)
 
-    # Predict heights (ft)
+    # Predict heights (ft) -- dominant and secondary partitions each wrap
+    # around Duxbury Reef according to their own direction; the function
+    # applies each partition's own multiplier before combining internally.
     mop_heights = mop_swell_df.apply(
         lambda row: predict_bolinas_surf_height(
-            row["hs_swell"] * 3.28084, row["tp"], row["dp"], surf_cfg["nearshore"]
+            row["hs_swell"] * 3.28084,
+            row["tp"],
+            row["dp"],
+            row["hs_secondary"] * 3.28084,
+            row["tp_secondary"],
+            row["dp_secondary"],
+            surf_cfg["nearshore"],
         ),
         axis=1,
     )
@@ -573,8 +814,12 @@ def process_data_wrapper(fetch_data_output: dict, config: dict):
         ["final_surf_score", "primary_swell_score", "wind_score", "tide_score"]
     ] = pd.DataFrame(scoring_results.tolist(), index=forecast_df.index)
 
-    # WW3 PARTITION CONTEXT (Diagnostic Only)
-    # We use power ranking to pick the Dominant/Secondary for the UI strings
+    # OFFSHORE WW3 SWELL CONTEXT (UI display only)
+    # We use power ranking to pick the Dominant/Secondary for the UI. This is
+    # raw offshore WW3 data, pre-refraction/shadowing -- it's shown to the
+    # surfer as "what's out there" and is NOT fed into swell_score (WW3's
+    # offshore "dominant" swell isn't necessarily what's dominant after
+    # Duxbury Reef transforms it -- the actual scoring stays MOP-based).
     df_ww3 = expand_timeseries_data(fetch_data_output["ww3"])
     if isinstance(df_ww3.index, pd.MultiIndex):
         df_ww3 = df_ww3.reset_index(level=0, drop=True)
@@ -586,19 +831,18 @@ def process_data_wrapper(fetch_data_output: dict, config: dict):
     ww3_context = (
         df_ww3.reset_index().groupby("time").apply(aggregate_hourly_partitions)
     )
+    offshore_rename = {
+        "dominant_Hs_ft": "offshore_dominant_Hs_ft",
+        "dominant_Tp_s": "offshore_dominant_Tp_s",
+        "dominant_Dir_deg": "offshore_dominant_Dir_deg",
+        "dominant_power_idx": "offshore_dominant_power_idx",
+        "secondary_Hs_ft": "offshore_secondary_Hs_ft",
+        "secondary_Tp_s": "offshore_secondary_Tp_s",
+        "secondary_Dir_deg": "offshore_secondary_Dir_deg",
+        "secondary_power_idx": "offshore_secondary_power_idx",
+    }
     forecast_df = forecast_df.join(
-        ww3_context[
-            [
-                "dominant_Hs_ft",
-                "dominant_Tp_s",
-                "dominant_Dir_deg",
-                "dominant_power_idx",
-                "secondary_Hs_ft",
-                "secondary_Tp_s",
-                "secondary_Dir_deg",
-                "secondary_power_idx",
-            ]
-        ],
+        ww3_context[list(offshore_rename)].rename(columns=offshore_rename),
         how="left",
     )
 
@@ -624,13 +868,18 @@ def process_data_wrapper(fetch_data_output: dict, config: dict):
         "wind_direction": "Wind Direction (Deg)",
         "wind_category": "Wind Direction",
         "tide_height": "Tide Height (ft)",
-        "dominant_Hs_ft": "Dominant Swell Size (ft)",
-        "dominant_Tp_s": "Dominant Swell Period",
-        "dominant_Dir_deg": "Dominant Swell Direction",
-        "secondary_Hs_ft": "Secondary Swell Size (ft)",
-        "secondary_Tp_s": "Secondary Swell Period",
-        "secondary_Dir_deg": "Secondary Swell Direction",
-        "hs_swell": "MOP Hs (m)",
+        # WW3 offshore swells, pre-refraction/shadowing -- this is the
+        # "what's out there" info surfaced in the UI. By the time a swell
+        # reaches MA147 it's refracted too far to describe in these terms;
+        # the actual scoring/height prediction stays MOP-based (hs_swell,
+        # tp, dp, hs_secondary, etc. below), this is UI labeling only.
+        "offshore_dominant_Hs_ft": "Offshore Dominant Swell Size (ft)",
+        "offshore_dominant_Tp_s": "Offshore Dominant Swell Period",
+        "offshore_dominant_Dir_deg": "Offshore Dominant Swell Direction",
+        "offshore_secondary_Hs_ft": "Offshore Secondary Swell Size (ft)",
+        "offshore_secondary_Tp_s": "Offshore Secondary Swell Period",
+        "offshore_secondary_Dir_deg": "Offshore Secondary Swell Direction",
+        "hs_swell": "MOP Dominant Hs (m)",
         "tp": "Peak Period (s)",
         "dp": "Peak Direction (deg)",
         "spread": "Directional Spread (deg)",

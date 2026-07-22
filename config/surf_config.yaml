@@ -32,11 +32,20 @@ data_sources:
 
 surf_model:
 
+  # === Spectral peak partitioning (frequency-domain, per timestep) ===
+  # Detects multiple energy peaks within the swell band on the MA147 spectrum
+  # itself (the nearshore-transformed superposition of every offshore swell),
+  # rather than re-deriving swells from raw WW3 partitions.
+  partitioning:
+    min_peak_prominence: 0.2   # fraction of the spectrum's max energy density a candidate peak must reach to count as a distinct swell; provisional, tune via simulations/config_tuning.ipynb
+    min_peak_distance_hz: 0.02 # confirmed against real MA147 bin spacing (0.005 Hz bins, 12 total in the 0.04-0.095 Hz swell band); ~4 bins apart
+    max_partitions_mop: 2      # cap at dominant + secondary, matching WW3 convention
+
   spectral_scoring:
       # Height Scoring (Hs) — sigmoid curve
       hs_min_m: 0.3          # Waves smaller than this (in meters) get 0 score (hard cutoff)
-      hs_center_m: 1.0       # Inflection point of sigmoid (score = 0.5 here)
-      hs_steepness: 6        # Sharpness of transition; higher = more cliff-like
+      hs_center_m: 0.8       # Inflection point of sigmoid (score = 0.5 here)
+      hs_steepness: 5        # Sharpness of transition; higher = more cliff-like
 
       # Period Scoring (Tp) — sigmoid curve
       tp_min_s: 10.0         # Periods below this get 0 score (hard cutoff)
@@ -61,7 +70,7 @@ surf_model:
     
   # === Nearshore shoaling and energy decay ===
   nearshore:
-    range_factor: 0.10        # ±15% spread for min/max surf range
+    range_factor: 0.10        # ±x% spread for min/max surf range
     range_period_min: 16      # minimum period where range_factor starts increasing
     range_step: 0.01          # % by which range_factor spread increases per period second > range_period_min
     # direction factors

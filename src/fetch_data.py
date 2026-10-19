@@ -1,4 +1,6 @@
 # IMPORTS
+import tempfile
+import certifi
 import requests
 from datetime import datetime, timedelta
 from noaa_coops import Station
@@ -17,6 +19,104 @@ pacific = ZoneInfo("America/Los_Angeles")
 # datasets are opened via the pydap engine with a descriptive User-Agent instead.
 DAP_USER_AGENT = "bolinas-surf-forecast/1.0 (+https://github.com/hslord/bolinas-surf-forecast)"
 
+# thredds.ucar.edu's cert chains through an intermediate CA (emSign's 2024
+# "Root TLS CA - G1") that isn't self-signed - it's itself issued by emSign's
+# actual self-signed root ("emSign Root CA - G1", 2018-2043). certifi doesn't
+# ship the intermediate, and apparently doesn't reliably ship a byte-matching
+# copy of the root either (GitHub Actions' hosted Python still failed to
+# build the chain even after pinning just the intermediate: "unable to get
+# issuer certificate"). Pin both certs explicitly so the chain is complete
+# and self-sufficient, independent of whatever any given environment's
+# certifi/OS trust store happens to contain.
+#
+# Verified as the correct, currently-valid chain via:
+#   openssl s_client -connect thredds.ucar.edu:443 -showcerts   (leaf + intermediate)
+#   curl http://repository.emsign.com/certs/emSignRootCAG1.crt  (the root, from the
+#     intermediate's Authority Information Access URL)
+#   openssl verify -CAfile <root+intermediate> -untrusted <root+intermediate> <leaf>  -> OK
+_EXTRA_TRUSTED_CA_PEM = """\
+-----BEGIN CERTIFICATE-----
+MIIFuzCCBKOgAwIBAgIQAPerZVWeEIEt9khDR1hqJTANBgkqhkiG9w0BAQsFADBn
+MQswCQYDVQQGEwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11
+ZGhyYSBUZWNobm9sb2dpZXMgTGltaXRlZDEcMBoGA1UEAxMTZW1TaWduIFJvb3Qg
+Q0EgLSBHMTAeFw0yNDA3MTExNDUyMjFaFw0zOTA3MDkxODMwMDBaMFYxCzAJBgNV
+BAYTAklOMSUwIwYDVQQKDBxlTXVkaHJhIFRlY2hub2xvZ2llcyBMaW1pdGVkMSAw
+HgYDVQQDDBdlbVNpZ24gUm9vdCBUTFMgQ0EgLSBHMTCCAiIwDQYJKoZIhvcNAQEB
+BQADggIPADCCAgoCggIBAMPm5mm136ImUw1EdfpP+tY0OmCgnH1eu6MvMr4P/isE
+dsRtmVjH653JHnPpPeUjGSbvLKGCabv9YvVBShZOvrI3GDIPrTguyUhONiygrjYS
+McbkG0WouoPFybNE1IjYleAuQ8mdz5gsZ96lCfaAfmy1C9pidUBweF9KWQ31HzQb
+Sak5T+0yqCyxNGZNdnrXodEwuH9kj+MOt3wL86K8KYH6CJv3uyhfa0UQw+Ho3tNH
+/DwdXs1m9FUViimqWd9GZcscYB7um484iVDVjimNd9cMY1bEMAFpCwzyycWvrjdj
+V74q48eCITrg41GSS6Wr0OxKBY3Mh1Yt+tl30MWQVcb0yZgt8e0Oq2a25LZYpTz7
+eMBJ9+Zm+AJKE75vGKd0lwa68j9m8vb2+l1w3tbl1OAZGGA5D7FcBcGiIFAXm/aq
+s0lEYSZmp/UzGrwtswtPKnqhR87EolO+AMdvGJAnbhqsvrsX2FcxaV7Of2vIWDJ6
+hdpWaHa5YjNXpCgDpiaKRd5F6opQsb8WmQdUswZgIocLb4egKzR/ndYX6xlxnL/h
+U7W2HLqXckLR1HNCFz6wLgLuHmi7Zf3x760BbP0HwRIWryGUDJhAmh+gg3JNT/HR
+BL9bYpBKL7yjM+IJ70Q4tRFWwlpGMziRNNOLeOkem1DBxDl6+Q3A0v5R/HLVMG0p
+AgMBAAGjggFyMIIBbjAfBgNVHSMEGDAWgBT77w2GnrDj3am58SEXfz788HcrGjAd
+BgNVHQ4EFgQUZB3J2PjE7ARLIoH1MppeueeTUvkwHQYDVR0lBBYwFAYIKwYBBQUH
+AwEGCCsGAQUFBwMCMD0GA1UdIAQ2MDQwMgYEVR0gADAqMCgGCCsGAQUFBwIBFhxo
+dHRwOi8vcmVwb3NpdG9yeS5lbXNpZ24uY29tMHUGCCsGAQUFBwEBBGkwZzAiBggr
+BgEFBQcwAYYWaHR0cDovL29jc3AuZW1zaWduLmNvbTBBBggrBgEFBQcwAoY1aHR0
+cDovL3JlcG9zaXRvcnkuZW1zaWduLmNvbS9jZXJ0cy9lbVNpZ25Sb290Q0FHMS5j
+cnQwMwYDVR0fBCwwKjAooCagJIYiaHR0cDovL2NybC5lbXNpZ24uY29tP1Jvb3RD
+QUcxLmNybDAOBgNVHQ8BAf8EBAMCAQYwEgYDVR0TAQH/BAgwBgEB/wIBATANBgkq
+hkiG9w0BAQsFAAOCAQEABj/hFjkky/uOQZ0k3peoiVG7+qwhyC8TgaTLuDZisrnX
+7S1GvSeiOs8xeKyp8dnCbE6S1XHFtJbZi8PtSi+3haElYjkSiGixXd8PYLtNmCn9
+cK5ymSBVssavkolI3tONt1t2kzhyAaZItZqGOVJoeRxbSkM/vTKWKqlFYHn/J00u
+FG7ii70vEyF3Ly0scGHCpD1BFoYajQksxvQ1m3rtKKMwBucZNTejdA0Npf0iSiDX
+9HUrEEqodKnRLUMSQz4K0Bd1kB3AVn8tT5JAc1HlgmxQ1OTTz5NcX60ATo4eQIHT
+a9Fb1/Op2vpQ/BhGF0vxOvg3nwleIchABUbyj9XnxQ==
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIDlDCCAnygAwIBAgIKMfXkYgxsWO3W2DANBgkqhkiG9w0BAQsFADBnMQswCQYD
+VQQGEwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11ZGhyYSBU
+ZWNobm9sb2dpZXMgTGltaXRlZDEcMBoGA1UEAxMTZW1TaWduIFJvb3QgQ0EgLSBH
+MTAeFw0xODAyMTgxODMwMDBaFw00MzAyMTgxODMwMDBaMGcxCzAJBgNVBAYTAklO
+MRMwEQYDVQQLEwplbVNpZ24gUEtJMSUwIwYDVQQKExxlTXVkaHJhIFRlY2hub2xv
+Z2llcyBMaW1pdGVkMRwwGgYDVQQDExNlbVNpZ24gUm9vdCBDQSAtIEcxMIIBIjAN
+BgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk0u76WaK7p1b1TST0Bsew+eeuGQz
+f2N4aLTNLnF115sgxk0pvLZoYIr3IZpWNVrzdr3YzZr/k1ZLpVkGoZM0Kd0WNHVO
+8oG0x5ZOrRkVUkr+PHB1cM2vK6sVmjM8qrOLqs1D/fXqcP/tzxE7lM5OMhbTI0Aq
+d7OvPAEsbO2ZLIvZTmmYsvePQbAyeGHWDV/D+qJAkh1cF+ZwPjXnorfCYuKrpDhM
+tTk1b+oDafo6VGiFbdbyL0NVHpENDtjVaqSW0RM8LHhQ6DqS0hdW5TUaQBw+jSzt
+Od9C4INBdN+jzcKGYEho42kLVACL5HZpIQ15TjQIXhTCzLG3rdd8cIrHhQIDAQAB
+o0IwQDAdBgNVHQ4EFgQU++8Nhp6w492pufEhF38+/PB3KxowDgYDVR0PAQH/BAQD
+AgEGMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAFn/8oz1h31x
+PaOfG1vR2vjTnGs2vZupYeveFix0PZ7mddrXuqe8QhfnPZHr5X3dPpzxz5KsbEjM
+wiI/aTvFthUvozXGaCocV685743QNcMYDHsAVhzNixl03r4PEuDQqqE/AjSxcM6d
+GNYIAwlG7mDgfrbESQRRfXBgvKqy/3lyeqYdPV8q+Mri/Tm3R7nrft8EI6/6nAYH
+6ftjk4BAtcZsCjEozgyfz7MjNYBBjWzEN3uBL4ChQEKF6dk4jeihU80Bv2noWgby
+RQuQ+q7hv53yrlc8pa6yVvSLZUDp/TGBLPQ5Cdjua6e0ph0VpZj3AYHYhX3zUVxx
+iN66zB+Afko=
+-----END CERTIFICATE-----
+"""
+
+
+def _ca_bundle_path() -> str:
+    """Path to a CA bundle combining certifi's certs with the pinned extra CA.
+
+    pydap's session handling (pydap.net.build_session) discards any adapter
+    or SSL context mounted on a session passed in as `session=`, building a
+    fresh plain requests.Session() instead. The `verify` argument is the one
+    thing that does get threaded through to the actual request, so the fix
+    has to be a CA bundle file path rather than a custom SSLContext/adapter.
+    """
+    global _CA_BUNDLE_PATH
+    if _CA_BUNDLE_PATH is None:
+        with open(certifi.where(), "r", encoding="ascii") as f:
+            certifi_certs = f.read()
+        fd, path = tempfile.mkstemp(suffix=".pem")
+        with open(fd, "w", encoding="ascii") as f:
+            f.write(certifi_certs)
+            f.write("\n")
+            f.write(_EXTRA_TRUSTED_CA_PEM)
+        _CA_BUNDLE_PATH = path
+    return _CA_BUNDLE_PATH
+
+
+_CA_BUNDLE_PATH = None
+
 
 def _retry(func, retries=3, delay=2, backoff=2):
     """Retry a function with exponential backoff."""
@@ -32,12 +132,25 @@ def _retry(func, retries=3, delay=2, backoff=2):
 
 
 def _open_dap_dataset(url: str):
-    """Open an OPeNDAP dataset via pydap with a descriptive User-Agent, with retries."""
+    """Open an OPeNDAP dataset via pydap with a descriptive User-Agent, with retries.
+
+    Goes through pydap.client.open_url directly rather than
+    xr.backends.PydapDataStore.open(url, session=...): pydap builds a fresh
+    plain requests.Session internally and ignores any session passed in
+    (aside from an Authorization bearer token), so a custom header or SSL
+    adapter mounted on that session never reaches the actual request. `verify`
+    and `get_kwargs` are the two things pydap does thread through to the
+    request, so those carry the CA bundle and the User-Agent instead.
+    """
+    from pydap.client import open_url
 
     def _open():
-        session = requests.Session()
-        session.headers.update({"User-Agent": DAP_USER_AGENT})
-        store = xr.backends.PydapDataStore.open(url, session=session)
+        dataset = open_url(
+            url,
+            verify=_ca_bundle_path(),
+            get_kwargs={"headers": {"User-Agent": DAP_USER_AGENT}},
+        )
+        store = xr.backends.PydapDataStore(dataset)
         return xr.open_dataset(store)
 
     return _retry(_open)

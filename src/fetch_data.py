@@ -1,5 +1,8 @@
 # IMPORTS
+import ssl
+import certifi
 import requests
+from requests.adapters import HTTPAdapter
 from datetime import datetime, timedelta
 from noaa_coops import Station
 from zoneinfo import ZoneInfo
@@ -16,6 +19,69 @@ pacific = ZoneInfo("America/Los_Angeles")
 # bot/scraper traffic. The netcdf4 engine can't set custom headers, so OPeNDAP
 # datasets are opened via the pydap engine with a descriptive User-Agent instead.
 DAP_USER_AGENT = "bolinas-surf-forecast/1.0 (+https://github.com/hslord/bolinas-surf-forecast)"
+
+# thredds.ucar.edu's cert chains through this intermediate CA (emSign, issued
+# under their 2024 "Root TLS CA - G1"), which certifi doesn't ship yet even
+# though it's a legitimate, currently-valid CA cert (expires 2039). Neither
+# certifi nor the OS default trust store on GitHub Actions' hosted Python
+# recognizes it, causing CERTIFICATE_VERIFY_FAILED even though the leaf cert
+# itself is fine. Pin it explicitly alongside certifi's normal bundle rather
+# than depending on ambient trust-store contents.
+# To refresh/verify: openssl s_client -connect thredds.ucar.edu:443 -showcerts
+_EXTRA_TRUSTED_CA_PEM = """\
+-----BEGIN CERTIFICATE-----
+MIIFuzCCBKOgAwIBAgIQAPerZVWeEIEt9khDR1hqJTANBgkqhkiG9w0BAQsFADBn
+MQswCQYDVQQGEwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11
+ZGhyYSBUZWNobm9sb2dpZXMgTGltaXRlZDEcMBoGA1UEAxMTZW1TaWduIFJvb3Qg
+Q0EgLSBHMTAeFw0yNDA3MTExNDUyMjFaFw0zOTA3MDkxODMwMDBaMFYxCzAJBgNV
+BAYTAklOMSUwIwYDVQQKDBxlTXVkaHJhIFRlY2hub2xvZ2llcyBMaW1pdGVkMSAw
+HgYDVQQDDBdlbVNpZ24gUm9vdCBUTFMgQ0EgLSBHMTCCAiIwDQYJKoZIhvcNAQEB
+BQADggIPADCCAgoCggIBAMPm5mm136ImUw1EdfpP+tY0OmCgnH1eu6MvMr4P/isE
+dsRtmVjH653JHnPpPeUjGSbvLKGCabv9YvVBShZOvrI3GDIPrTguyUhONiygrjYS
+McbkG0WouoPFybNE1IjYleAuQ8mdz5gsZ96lCfaAfmy1C9pidUBweF9KWQ31HzQb
+Sak5T+0yqCyxNGZNdnrXodEwuH9kj+MOt3wL86K8KYH6CJv3uyhfa0UQw+Ho3tNH
+/DwdXs1m9FUViimqWd9GZcscYB7um484iVDVjimNd9cMY1bEMAFpCwzyycWvrjdj
+V74q48eCITrg41GSS6Wr0OxKBY3Mh1Yt+tl30MWQVcb0yZgt8e0Oq2a25LZYpTz7
+eMBJ9+Zm+AJKE75vGKd0lwa68j9m8vb2+l1w3tbl1OAZGGA5D7FcBcGiIFAXm/aq
+s0lEYSZmp/UzGrwtswtPKnqhR87EolO+AMdvGJAnbhqsvrsX2FcxaV7Of2vIWDJ6
+hdpWaHa5YjNXpCgDpiaKRd5F6opQsb8WmQdUswZgIocLb4egKzR/ndYX6xlxnL/h
+U7W2HLqXckLR1HNCFz6wLgLuHmi7Zf3x760BbP0HwRIWryGUDJhAmh+gg3JNT/HR
+BL9bYpBKL7yjM+IJ70Q4tRFWwlpGMziRNNOLeOkem1DBxDl6+Q3A0v5R/HLVMG0p
+AgMBAAGjggFyMIIBbjAfBgNVHSMEGDAWgBT77w2GnrDj3am58SEXfz788HcrGjAd
+BgNVHQ4EFgQUZB3J2PjE7ARLIoH1MppeueeTUvkwHQYDVR0lBBYwFAYIKwYBBQUH
+AwEGCCsGAQUFBwMCMD0GA1UdIAQ2MDQwMgYEVR0gADAqMCgGCCsGAQUFBwIBFhxo
+dHRwOi8vcmVwb3NpdG9yeS5lbXNpZ24uY29tMHUGCCsGAQUFBwEBBGkwZzAiBggr
+BgEFBQcwAYYWaHR0cDovL29jc3AuZW1zaWduLmNvbTBBBggrBgEFBQcwAoY1aHR0
+cDovL3JlcG9zaXRvcnkuZW1zaWduLmNvbS9jZXJ0cy9lbVNpZ25Sb290Q0FHMS5j
+cnQwMwYDVR0fBCwwKjAooCagJIYiaHR0cDovL2NybC5lbXNpZ24uY29tP1Jvb3RD
+QUcxLmNybDAOBgNVHQ8BAf8EBAMCAQYwEgYDVR0TAQH/BAgwBgEB/wIBATANBgkq
+hkiG9w0BAQsFAAOCAQEABj/hFjkky/uOQZ0k3peoiVG7+qwhyC8TgaTLuDZisrnX
+7S1GvSeiOs8xeKyp8dnCbE6S1XHFtJbZi8PtSi+3haElYjkSiGixXd8PYLtNmCn9
+cK5ymSBVssavkolI3tONt1t2kzhyAaZItZqGOVJoeRxbSkM/vTKWKqlFYHn/J00u
+FG7ii70vEyF3Ly0scGHCpD1BFoYajQksxvQ1m3rtKKMwBucZNTejdA0Npf0iSiDX
+9HUrEEqodKnRLUMSQz4K0Bd1kB3AVn8tT5JAc1HlgmxQ1OTTz5NcX60ATo4eQIHT
+a9Fb1/Op2vpQ/BhGF0vxOvg3nwleIchABUbyj9XnxQ==
+-----END CERTIFICATE-----
+"""
+
+
+def _dap_ssl_context() -> ssl.SSLContext:
+    """SSL context using certifi's CA bundle plus the pinned emSign intermediate."""
+    context = ssl.create_default_context(cafile=certifi.where())
+    context.load_verify_locations(cadata=_EXTRA_TRUSTED_CA_PEM)
+    return context
+
+
+class _PinnedCAAdapter(HTTPAdapter):
+    """HTTPAdapter that verifies TLS against certifi + the pinned extra CA."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs["ssl_context"] = _dap_ssl_context()
+        return super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, *args, **kwargs):
+        kwargs["ssl_context"] = _dap_ssl_context()
+        return super().proxy_manager_for(*args, **kwargs)
 
 
 def _retry(func, retries=3, delay=2, backoff=2):
@@ -37,6 +103,7 @@ def _open_dap_dataset(url: str):
     def _open():
         session = requests.Session()
         session.headers.update({"User-Agent": DAP_USER_AGENT})
+        session.mount("https://", _PinnedCAAdapter())
         store = xr.backends.PydapDataStore.open(url, session=session)
         return xr.open_dataset(store)
 

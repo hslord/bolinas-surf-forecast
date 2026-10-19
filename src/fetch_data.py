@@ -1,8 +1,7 @@
 # IMPORTS
-import ssl
+import tempfile
 import certifi
 import requests
-from requests.adapters import HTTPAdapter
 from datetime import datetime, timedelta
 from noaa_coops import Station
 from zoneinfo import ZoneInfo
@@ -65,23 +64,29 @@ a9Fb1/Op2vpQ/BhGF0vxOvg3nwleIchABUbyj9XnxQ==
 """
 
 
-def _dap_ssl_context() -> ssl.SSLContext:
-    """SSL context using certifi's CA bundle plus the pinned emSign intermediate."""
-    context = ssl.create_default_context(cafile=certifi.where())
-    context.load_verify_locations(cadata=_EXTRA_TRUSTED_CA_PEM)
-    return context
+def _ca_bundle_path() -> str:
+    """Path to a CA bundle combining certifi's certs with the pinned extra CA.
+
+    pydap's session handling (pydap.net.build_session) discards any adapter
+    or SSL context mounted on a session passed in as `session=`, building a
+    fresh plain requests.Session() instead. The `verify` argument is the one
+    thing that does get threaded through to the actual request, so the fix
+    has to be a CA bundle file path rather than a custom SSLContext/adapter.
+    """
+    global _CA_BUNDLE_PATH
+    if _CA_BUNDLE_PATH is None:
+        with open(certifi.where(), "r", encoding="ascii") as f:
+            certifi_certs = f.read()
+        fd, path = tempfile.mkstemp(suffix=".pem")
+        with open(fd, "w", encoding="ascii") as f:
+            f.write(certifi_certs)
+            f.write("\n")
+            f.write(_EXTRA_TRUSTED_CA_PEM)
+        _CA_BUNDLE_PATH = path
+    return _CA_BUNDLE_PATH
 
 
-class _PinnedCAAdapter(HTTPAdapter):
-    """HTTPAdapter that verifies TLS against certifi + the pinned extra CA."""
-
-    def init_poolmanager(self, *args, **kwargs):
-        kwargs["ssl_context"] = _dap_ssl_context()
-        return super().init_poolmanager(*args, **kwargs)
-
-    def proxy_manager_for(self, *args, **kwargs):
-        kwargs["ssl_context"] = _dap_ssl_context()
-        return super().proxy_manager_for(*args, **kwargs)
+_CA_BUNDLE_PATH = None
 
 
 def _retry(func, retries=3, delay=2, backoff=2):
@@ -98,13 +103,25 @@ def _retry(func, retries=3, delay=2, backoff=2):
 
 
 def _open_dap_dataset(url: str):
-    """Open an OPeNDAP dataset via pydap with a descriptive User-Agent, with retries."""
+    """Open an OPeNDAP dataset via pydap with a descriptive User-Agent, with retries.
+
+    Goes through pydap.client.open_url directly rather than
+    xr.backends.PydapDataStore.open(url, session=...): pydap builds a fresh
+    plain requests.Session internally and ignores any session passed in
+    (aside from an Authorization bearer token), so a custom header or SSL
+    adapter mounted on that session never reaches the actual request. `verify`
+    and `get_kwargs` are the two things pydap does thread through to the
+    request, so those carry the CA bundle and the User-Agent instead.
+    """
+    from pydap.client import open_url
 
     def _open():
-        session = requests.Session()
-        session.headers.update({"User-Agent": DAP_USER_AGENT})
-        session.mount("https://", _PinnedCAAdapter())
-        store = xr.backends.PydapDataStore.open(url, session=session)
+        dataset = open_url(
+            url,
+            verify=_ca_bundle_path(),
+            get_kwargs={"headers": {"User-Agent": DAP_USER_AGENT}},
+        )
+        store = xr.backends.PydapDataStore(dataset)
         return xr.open_dataset(store)
 
     return _retry(_open)

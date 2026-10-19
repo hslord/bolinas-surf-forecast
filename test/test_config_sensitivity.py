@@ -10,6 +10,7 @@ import sys
 import copy
 from pathlib import Path
 import pytest
+import requests
 import numpy as np
 import xarray as xr
 import yaml
@@ -34,7 +35,10 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "surf_config.yaml
 @pytest.fixture(scope="module")
 def _hindcast_swell():
     """Load a 48-hour slice of MA147 hindcast, filtered to swell band."""
-    ds = _open_dap_dataset(HINDCAST_URL)
+    try:
+        ds = _open_dap_dataset(HINDCAST_URL)
+    except (requests.exceptions.RequestException, OSError) as e:
+        pytest.skip(f"CDIP THREDDS unreachable from this environment: {e}")
     ds = ds.sel(waveFrequency=ds.waveFrequency[ds.waveFrequency < 0.1])
     # Take the last 48 timesteps to keep it fast
     ds = ds.isel(waveTime=slice(-48, None))

@@ -25,7 +25,7 @@ from fetch_data import (
 # ── fetch_cdip_mop_forecast ──────────────────────────────────────────────
 
 
-@patch("fetch_data.xr.open_dataset")
+@patch("fetch_data._open_dap_dataset")
 def test_cdip_mop_returns_dataset(mock_open):
     freqs = np.array([0.04, 0.06, 0.08, 0.12, 0.15])
     ds = xr.Dataset(
@@ -39,7 +39,7 @@ def test_cdip_mop_returns_dataset(mock_open):
     assert (result.waveFrequency.values < 0.1).all()
 
 
-@patch("fetch_data.xr.open_dataset")
+@patch("fetch_data._open_dap_dataset")
 def test_cdip_mop_ecmwf_url(mock_open):
     mock_open.return_value = xr.Dataset(
         coords={"waveFrequency": np.array([0.05])}
@@ -57,7 +57,7 @@ def test_cdip_mop_ecmwf_url(mock_open):
     assert "MA147" in url
 
 
-@patch("fetch_data.xr.open_dataset")
+@patch("fetch_data._open_dap_dataset")
 def test_cdip_mop_ncep_url(mock_open):
     ds = xr.Dataset(
         {"waveEnergyDensity": (["waveFrequency"], [1.0])},
@@ -71,7 +71,7 @@ def test_cdip_mop_ncep_url(mock_open):
     assert "ecmwf" not in url
 
 
-@patch("fetch_data.xr.open_dataset")
+@patch("fetch_data._open_dap_dataset")
 def test_cdip_mop_raises_on_bad_data(mock_open):
     mock_open.side_effect = KeyError("missing var")
     with pytest.raises(RuntimeError):

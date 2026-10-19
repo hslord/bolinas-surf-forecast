@@ -11,6 +11,12 @@ from reference_functions import status
 
 pacific = ZoneInfo("America/Los_Angeles")
 
+# THREDDS servers (UCAR, CDIP) have started rejecting requests with missing
+# or generic User-Agent headers (e.g. "python-requests", "GitHub-Actions") as
+# bot/scraper traffic. The netcdf4 engine can't set custom headers, so OPeNDAP
+# datasets are opened via the pydap engine with a descriptive User-Agent instead.
+DAP_USER_AGENT = "bolinas-surf-forecast/1.0 (+https://github.com/hslord/bolinas-surf-forecast)"
+
 
 def _retry(func, retries=3, delay=2, backoff=2):
     """Retry a function with exponential backoff."""
@@ -23,6 +29,18 @@ def _retry(func, retries=3, delay=2, backoff=2):
             status(f"Retry {attempt + 1}/{retries} after {delay}s...")
             time.sleep(delay)
             delay *= backoff
+
+
+def _open_dap_dataset(url: str):
+    """Open an OPeNDAP dataset via pydap with a descriptive User-Agent, with retries."""
+
+    def _open():
+        session = requests.Session()
+        session.headers.update({"User-Agent": DAP_USER_AGENT})
+        store = xr.backends.PydapDataStore.open(url, session=session)
+        return xr.open_dataset(store)
+
+    return _retry(_open)
 
 
 def fetch_ww3_timeseries(
@@ -48,7 +66,7 @@ def fetch_ww3_timeseries(
     try:
 
         # Open dataset
-        ds = xr.open_dataset(url, engine="netcdf4")
+        ds = _open_dap_dataset(url)
 
         # Detect coordinate names
         latname = next(c for c in ds.coords if "lat" in c.lower())
@@ -187,7 +205,7 @@ def fetch_cdip_mop_forecast(mop_number, min_swell_frequency, forecast_model="ecm
                 f"cdip/model/MOP_alongshore/{mop_number}_ecmwf_fc.nc"
             )
 
-        fc_swell = xr.open_dataset(fc_url, engine="netcdf4")
+        fc_swell = _open_dap_dataset(fc_url)
 
         # Filter to swell band (periods > 10s, i.e. frequencies < 0.1 Hz)
         fc_swell = fc_swell.sel(
@@ -248,10 +266,13 @@ def fetch_tide_predictions(station_id: str, days: int = 14):
 
         df.rename(columns={"v": "tide_height"}, inplace=True)
 
-        # The noaa_coops library returns timezone-naive datetimes
+        # The noaa_coops library returns timezone-naive datetimes already in
+        # Pacific local time (lst_ldt), so no localization is needed here.
+        # Round-tripping through tz_localize(pacific) raises on DST transition
+        # days, when a naive hour is ambiguous (fall back) or nonexistent
+        # (spring forward).
         if df.index.tz is None:
-            # Localize to Pacific time (assumes the times are already in Pacific)
-            df.index = df.index.tz_localize(pacific).tz_localize(None)
+            pass
         else:
             # If it somehow has timezone info, convert to Pacific
             df.index = df.index.tz_convert(pacific).tz_localize(None)

@@ -239,3 +239,5 @@ venv/
 
 # Project specific data
 data/forecast_df.parquet
+data/user_feedback.csv
+docs/

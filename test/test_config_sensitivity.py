@@ -21,6 +21,7 @@ from process_data import (
     predict_bolinas_surf_height,
     calculate_surf_score,
 )
+from fetch_data import _open_dap_dataset
 
 HINDCAST_URL = (
     "https://thredds.cdip.ucsd.edu/thredds/dodsC/"
@@ -33,7 +34,7 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "surf_config.yaml
 @pytest.fixture(scope="module")
 def _hindcast_swell():
     """Load a 48-hour slice of MA147 hindcast, filtered to swell band."""
-    ds = xr.open_dataset(HINDCAST_URL, engine="netcdf4")
+    ds = _open_dap_dataset(HINDCAST_URL)
     ds = ds.sel(waveFrequency=ds.waveFrequency[ds.waveFrequency < 0.1])
     # Take the last 48 timesteps to keep it fast
     ds = ds.isel(waveTime=slice(-48, None))
